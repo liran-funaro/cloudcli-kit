@@ -172,8 +172,8 @@ else
   echo "no stylesheet at $SRC -- skipping appearance (run install.sh from cloudcli-kit)"
 fi
 
-# --- patch 2: frontend behaviours with no setting behind them ----------------
-# Three small changes in the app bundle, each made in a COPY: the upstream
+# --- patch 2: frontend behaviours, and one default worth flipping ------------
+# Four small changes in the app bundle, each made in a COPY: the upstream
 # index-*.js is never written to, which makes this idempotent by construction
 # and leaves an untouched original to fall back to.
 #
@@ -262,6 +262,21 @@ else:
     missing.append('conversation status (%s matches%s)'
                    % ('/'.join(str(c) for c in counts),
                       ', name %s taken' % ','.join(taken) if taken else ''))
+
+# (4) Enter for a newline, Cmd/Ctrl+Enter to send. Unlike the three above this
+# one HAS a setting -- Quick Settings (the tab on the right edge) > Input
+# Settings > "Send by Ctrl+Enter" -- it just defaults off. This flips that one
+# default and nothing else, which bounds what it can do: the preferences hook
+# persists the whole object to localStorage.uiPreferences on its FIRST render,
+# so a profile that has already opened the app has sendByCtrlEnter:false written
+# down and a stored value wins -- there it takes one flip of the toggle. This is
+# what a fresh profile starts from, and the toggle still works either way.
+SEND = 'sendByCtrlEnter:!1'
+if s.count(SEND) == 1:
+    s = s.replace(SEND, 'sendByCtrlEnter:!0')
+    applied.append('ctrl+enter to send')
+else:
+    missing.append('ctrl+enter to send (%d matches)' % s.count(SEND))
 
 open(out, 'w').write(s)
 for m in missing:

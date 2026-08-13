@@ -10,7 +10,7 @@ one of them:
 | | What it is | How it installs |
 |---|---|---|
 | **Recent** tab | Every project's conversations in one recency-ordered list, with a chip for the ones that stopped to ask you something | Settings → Plugins → paste this repo's URL |
-| Appearance + behaviour | Surfaces, accent, typography, inline code, full-width chat; Conversations as the sidebar's default, with a dot on the ones that are working; each model described, priced, and pruned in the model menu | `./install.sh` |
+| Appearance + behaviour | Surfaces, accent, typography, inline code, full-width chat; Conversations as the sidebar's default, with a dot on the ones that are working; each model described, priced, and pruned in the model menu; Enter for a newline, ⌘/Ctrl+Enter to send | `./install.sh` |
 
 ## Why the split
 
@@ -27,11 +27,13 @@ wrong for everything else here:
   eye. That is a filesystem job, not a browser job.
 - **The model options live in the server's own module.** Dropping one, or giving one a
   description worth reading, is an edit to a file on disk. No plugin surface reaches it.
-- **Three of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
+- **Four of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
   switch is React state; the model menu never passes the description to the menu component
-  that would render it; and the Conversations list is never handed the running-session state
-  its sibling lists draw a dot from. None of that is reachable from CSS, and a plugin runs
-  too late and in the wrong scope to change any of it.
+  that would render it; the Conversations list is never handed the running-session state
+  its sibling lists draw a dot from; and the Enter key sends by default. None of the first
+  three is reachable from CSS, and a plugin runs too late and in the wrong scope to change
+  any of them. The fourth *is* stored in the browser, but a plugin could only overwrite the
+  value you chose — the bundle edit changes the default and leaves your choice alone.
 
 So the plugin is the plugin, and the rest is one file plus a launcher. The upside of doing
 it this way rather than forking CloudCLI: nothing here lives in a file upstream also edits,
@@ -89,9 +91,9 @@ The list is fetched on open and on demand, never polled: `/api/projects` broadca
 `loading_progress` frame to every websocket client and the app renders it as a progress
 indicator, so a background poll would make the whole UI flicker.
 
-## Three behaviours with no setting behind them
+## Four small edits in the bundle
 
-All three are things the app already almost does, and each is a small edit in the bundle:
+Three are things the app already almost does; the fourth is a default worth flipping:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
   never persisted, so it reset to Projects on every load.
@@ -103,6 +105,16 @@ All three are things the app already almost does, and each is a small edit in th
   even though its own call site already reads two other fields off the very object that holds
   it. So the patch passes them along and reuses the app's own indicator: green for working,
   amber for a session waiting on an answer.
+- **Enter for a newline, ⌘/Ctrl+Enter to send.** This one the app does have a setting for —
+  Quick Settings (the tab on the right edge of the window) → Input Settings → *Send by
+  Ctrl+Enter* — it just defaults off, so every browser starts out sending on Enter. The patch
+  flips that one default and nothing else, which makes its reach precise: the preferences hook
+  persists the whole object to `localStorage.uiPreferences` on its **first render**, so a
+  profile that has already opened the app has `sendByCtrlEnter:false` written down, and a
+  stored value wins. There it takes one flip of the toggle, once. The patch is what a *fresh*
+  profile starts from — new browser, private window, another machine, cleared site storage —
+  and it leaves the toggle working in both directions, which is the point of changing the
+  default rather than the behaviour. Shift+Enter is a newline in either mode; it has never sent.
 
 The bundle is **never written to**. Each start makes a patched *copy* beside it, named by the
 md5 of its own contents (`assets/ide-<md5>.js`), and points `index.html` at that:
@@ -119,7 +131,7 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 3/3 applied -- sidebar default, model description, conversation status
+frontend: 4/4 applied -- sidebar default, model description, conversation status, ctrl+enter to send
 ```
 
 ## The model menu
