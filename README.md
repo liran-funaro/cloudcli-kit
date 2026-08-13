@@ -10,7 +10,7 @@ one of them:
 | | What it is | How it installs |
 |---|---|---|
 | **Recent** tab | Every project's conversations in one recency-ordered list, with a chip for the ones that stopped to ask you something | Settings → Plugins → paste this repo's URL |
-| Appearance + the floating pill | Surfaces, accent, typography, inline code, full-width chat — and the same Recent list as an `Alt+R` overlay reachable from anywhere | `./install.sh` |
+| Appearance + behaviour | Surfaces, accent, typography, inline code, full-width chat; Conversations as the sidebar's default; the description every model already carries, shown in the model menu | `./install.sh` |
 
 ## Why the split
 
@@ -26,6 +26,10 @@ wrong for everything else here:
   *at equal relative luminance* — contrast is then preserved by construction rather than by
   eye. That is a filesystem job, not a browser job.
 - **Hiding a model option edits the server's own module.** No plugin surface reaches it.
+- **Two of the tweaks are a single token inside the app bundle.** The sidebar's
+  Projects/Conversations switch is React state, and the model menu never passes the
+  description to the menu component that would render it. Neither is reachable from CSS, and
+  a plugin runs too late and in the wrong scope to change either.
 
 So the plugin is the plugin, and the rest is two files plus a launcher. The upside of doing
 it this way rather than forking CloudCLI: nothing here lives in a file upstream also edits,
@@ -55,8 +59,9 @@ That seeds two files and installs the launcher:
 
 ```
 ~/.config/cloudcli/ide-theme.css   appearance — yours to retune, seeded once
-~/.config/cloudcli/ide-recent.js   the floating pill — refreshed from the repo each run
-~/bin/cloudcli-start               applies both to the package on every start
+~/.config/cloudcli/ide-recent.js   the Recent list — the plugin's entry file, also
+                                   servable as a page script (CLOUDCLI_PILL=1)
+~/bin/cloudcli-start               applies everything to the package on every start
 ```
 
 Nothing is restarted, so it is safe to run while a session is in progress; reload the
@@ -67,7 +72,8 @@ browser to see the result.
 [`index.js`](index.js) is both the plugin entry and the pill, deliberately — so the list can
 never drift between the two places it appears. It branches on `import.meta.url`: a `blob:`
 URL means the plugin host is importing it for the tab, anything else means the browser
-loaded it as a page script and the pill is what was wanted. Both render the same DOM inside
+loaded it as a page script and the pill is what was wanted. The pill is **off by default**
+(`CLOUDCLI_PILL=1` brings it back) — the tab is the way in, and one list only wants one. Both render the same DOM inside
 a shadow root, so the app's styles and these can never collide — while CSS custom properties
 still inherit *through* the boundary, which is why the panel tracks the active theme and any
 retune without reading `api.context.theme` at all.
@@ -86,6 +92,34 @@ stopped because Claude asked you something. Those leave the Active tab the momen
 The list is fetched on open and on demand, never polled: `/api/projects` broadcasts a
 `loading_progress` frame to every websocket client and the app renders it as a progress
 indicator, so a background poll would make the whole UI flicker.
+
+## Two behaviours with no setting behind them
+
+Both are one token in the app bundle, and both are things the app already almost does:
+
+- **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
+  never persisted, so it reset to Projects on every load.
+- **The model's description in the model menu.** Every option already carries one, and the
+  menu-item component already renders one when given it — the effort menu right next door
+  passes exactly that prop. The model menu just never did.
+
+The bundle is **never written to**. Each start makes a patched *copy* beside it, named by the
+md5 of its own contents (`assets/ide-<md5>.js`), and points `index.html` at that:
+
+- Patching in place would not reach the browser. `/assets/` is served
+  `Cache-Control: immutable` **and** the bundled service worker is cache-first there, so a
+  browser that already has the entry chunk never asks again. A new name is a new cache entry,
+  and `index.html` is served `no-store`, so one reload picks it up.
+- Working from a pristine original makes the patch idempotent, and leaves something to fall
+  back to: the copy is `node --check`ed, and on failure `index.html` is pointed back at
+  upstream's own file. `CLOUDCLI_FRONTEND=0` does the same on purpose.
+
+Each substitution must match its anchor **exactly once** — in a minified bundle there is no
+way to tell the intended site from a coincidence — and the run says what it did:
+
+```
+frontend: 2/2 applied -- sidebar default, model description
+```
 
 ## Retuning the appearance
 
@@ -139,9 +173,12 @@ never edits.
   whose install scripts it hasn't recorded as approved, and says a future release will block
   them — which would produce an install that imports fine and then fails on its first query.
   If the check trips it prints the `npm rebuild` line to fix it and starts nothing.
-- `CLOUDCLI_DROP_MODELS` (default `fable`) lists model options to remove from the picker —
-  useful when a deployment's gateway cannot serve them. The edit is brace-matched, verified
-  with `node --check`, and reverted automatically if it would break syntax.
+- Everything is an environment knob, read on every start: `CLOUDCLI_PATCH_ONLY=1` (apply and
+  exit), `CLOUDCLI_PILL=1` (also serve the floating pill), `CLOUDCLI_FRONTEND=0` (serve
+  upstream's bundle untouched), and `CLOUDCLI_DROP_MODELS` (default `fable`) — model options
+  to remove from the picker, for a gateway that cannot serve them. That edit is
+  brace-matched, verified with `node --check`, and reverted automatically if it would break
+  syntax.
 - Delete `~/.config/cloudcli/ide-theme.css` or `ide-recent.js` and the next launcher run
   cleanly un-links it.
 

@@ -7,13 +7,19 @@
 #       Safe to run while a session is in progress -- the running server is
 #       untouched; the browser picks the changes up on its next reload.
 #
+#   CLOUDCLI_PILL=1 cloudcli-start
+#       Also serve the Recent list as a floating pill (Alt+R) on every page.
+#       Off by default: the plugin's own tab already shows that list, and two
+#       ways in is one more than the list is worth.
+#
 # This script applies; it does not carry content. The files it installs live in
 # ~/.config/cloudcli/, seeded by install.sh from the cloudcli-kit repo, and are
 # never overwritten here -- so they survive package upgrades AND kit updates,
 # and this script has no second copy of them to drift from.
 #
 #   ide-theme.css   appearance: surfaces, accent, typography, full width
-#   ide-recent.js   the "Recent" pill (the same file the plugin uses)
+#   ide-recent.js   the Recent list -- the plugin's entry file; served as a
+#                   page script only when CLOUDCLI_PILL=1
 #
 # Delete either one and the next run cleanly un-links it.
 set -euo pipefail
@@ -24,6 +30,8 @@ CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
 SRC="${CLOUDCLI_THEME:-$CONF/ide-theme.css}"
 JSRC="${CLOUDCLI_RECENT:-$CONF/ide-recent.js}"
 DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable}"
+PILL="${CLOUDCLI_PILL:-0}"
+FRONTEND="${CLOUDCLI_FRONTEND:-1}"
 
 if [[ ! -d $PKG ]]; then
   echo "installing @cloudcli-ai/cloudcli into $PREFIX ..."
@@ -170,16 +178,91 @@ else
   echo "no stylesheet at $SRC -- skipping appearance (run install.sh from cloudcli-kit)"
 fi
 
-# --- patch 2: recent conversations, across every project ---------------------
+# --- patch 2: recent conversations as a floating pill (opt-in) ---------------
 # The same file the plugin ships as its entry. Loaded as type="module" because
 # it branches on import.meta.url: a blob: URL means the plugin host is mounting
-# it as a tab, anything else means show the floating pill.
-if [[ -f $JSRC ]]; then
+# it as a tab, anything else means show the floating pill. The plugin tab is
+# the primary way in, so this is off unless CLOUDCLI_PILL=1 asks for it.
+if [[ -f $JSRC && $PILL == 1 ]]; then
   cp -f "$JSRC" "$JS"
   JVER="$(md5sum "$JS" | cut -c1-8)"
 else
   rm -f "$JS"
 fi
+
+# --- patch 3: two frontend behaviours with no setting behind them ------------
+# Both are one-token changes in the app bundle, so they are made in a COPY:
+# the upstream index-*.js is never written to, which makes this idempotent by
+# construction and leaves an untouched original to fall back to.
+#
+# The copy is content-addressed (ide-<md5>.js) rather than patched in place
+# because the server sends Cache-Control: immutable for /assets/ and the
+# bundled service worker is cache-first there -- a browser that has already
+# loaded the entry chunk would never ask for it again. A new name is a new
+# cache entry, and index.html is served no-store, so a reload always picks it
+# up. Set CLOUDCLI_FRONTEND=0 to serve the bundle untouched.
+ENTRY="$(ls "$PKG"/dist/assets/index-*.js 2>/dev/null | head -1 || true)"
+BJS=""
+if [[ -n ${ENTRY:-} && $FRONTEND == 1 ]]; then
+  TD="$(mktemp -d)"
+  # .mjs so `node --check` parses it as a module regardless of where it sits.
+  if python3 - "$ENTRY" "$TD/entry.mjs" <<'PY'
+import re, sys
+
+src, out = sys.argv[1], sys.argv[2]
+s = open(src).read()
+applied, missing = [], []
+
+# Each anchor must match EXACTLY once. A minified bundle offers no way to tell
+# the intended site from a coincidence, so anything other than one match is
+# reported and skipped rather than guessed at.
+
+# (1) The sidebar's Projects/Conversations/Archived switch is React state that
+# is never persisted, so it returns to Projects on every load. Conversations
+# is the list actually worth landing on.
+MODE = 'useState("projects")'
+if s.count(MODE) == 1:
+    s = s.replace(MODE, 'useState("conversations")')
+    applied.append('sidebar default')
+else:
+    missing.append('sidebar default (%d matches)' % s.count(MODE))
+
+# (2) Every model option carries a description, and the shared menu-item
+# component renders one when given one -- the effort menu right next door
+# passes exactly this prop, the model menu just never does. Matched
+# structurally, with a backreference, so the minifier's choice of variable
+# name does not matter.
+ITEM = re.compile(r'label:(\w+)\.label\|\|\1\.value,isSelected:')
+if len(ITEM.findall(s)) == 1:
+    s = ITEM.sub(r'label:\1.label||\1.value,description:\1.description,'
+                 r'isSelected:', s)
+    applied.append('model description')
+else:
+    missing.append('model description (%d matches)' % len(ITEM.findall(s)))
+
+open(out, 'w').write(s)
+for m in missing:
+    print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
+print('frontend: %d/%d applied%s'
+      % (len(applied), len(applied) + len(missing),
+         ' -- ' + ', '.join(applied) if applied else ''))
+sys.exit(0 if applied else 1)
+PY
+  then
+    if node --check "$TD/entry.mjs" >/dev/null 2>&1; then
+      BJS="ide-$(md5sum "$TD/entry.mjs" | cut -c1-8).js"
+      cp -f "$TD/entry.mjs" "$PKG/dist/assets/$BJS"
+    else
+      echo "WARNING: frontend patch broke syntax, serving upstream bundle" >&2
+    fi
+  fi
+  rm -rf "$TD"
+fi
+
+# Keep only the copy index.html is about to name -- which is none of them when
+# the patch is off, skipped or failed. A copy nothing loads is 3 MB of nothing.
+find "$PKG/dist/assets" -maxdepth 1 -name 'ide-*.js' \
+     ! -name "${BJS:-none}" -delete 2>/dev/null || true
 
 # --- link both into index.html ----------------------------------------------
 # Each tag is removed and re-inserted rather than edited in place, so the
@@ -187,9 +270,9 @@ fi
 # version cleanly un-links, and unchanged input gives unchanged output.
 IDX="$PKG/dist/index.html"
 if [[ -f $IDX ]]; then
-  python3 - "$IDX" "$VER" "$JVER" <<'PY'
+  python3 - "$IDX" "$VER" "$JVER" "$(basename "${ENTRY:-}")" "$BJS" <<'PY'
 import re, sys
-path, ver, jver = sys.argv[1], sys.argv[2], sys.argv[3]
+path, ver, jver, entry, bjs = sys.argv[1:6]
 src = open(path).read()
 out = src
 
@@ -202,6 +285,15 @@ def before_head(s, tag):
 # Drop any cache-busting query left by earlier versions of this script: the
 # overrides no longer live inside the hashed asset, so its URL is canonical.
 out = re.sub(r'(href="/assets/[^"?]*\.css)\?[^"]*"', r'\1"', out)
+
+# Point the module script at the patched copy of the entry chunk -- or back at
+# the pristine one if the patch is off, was skipped, or failed its syntax
+# check. Rewritten from whichever name is there now, so it is self-correcting
+# either way, and an upgrade that renames the chunk lands here first.
+if entry:
+    out = re.sub(r'(<script type="module"[^>]*src="/assets/)'
+                 r'(?:index|ide)-[^"]*\.js(")',
+                 r'\g<1>%s\g<2>' % (bjs or entry), out)
 
 out = re.sub(r'[ \t]*<link rel="stylesheet" href="/ide-theme\.css[^"]*"[^>]*>\n?', '', out)
 if ver:
@@ -220,6 +312,7 @@ if jver:
 state = ', '.join(filter(None, [
     'ide-theme.css?v=%s' % ver if ver else '',
     'ide-recent.js?v=%s' % jver if jver else '',
+    'assets/%s' % bjs if bjs else '',
 ])) or 'nothing'
 if out != src:
     open(path, 'w').write(out)
@@ -229,7 +322,7 @@ else:
 PY
 fi
 
-# --- patch 3: hide model options this deployment cannot serve ---------------
+# --- patch 4: hide model options this deployment cannot serve ---------------
 MP="$PKG/dist-server/server/modules/providers/list/claude/claude-models.provider.js"
 for M in $DROP_MODELS; do
   if [[ -f $MP ]] && grep -q "value: '$M'" "$MP"; then
@@ -266,7 +359,9 @@ done
 # interface, so an upgrade can move one and the patch would go quietly
 # ineffective -- the one genuine weakness of patching over forking. Check them
 # by name so a silent failure becomes a loud one. This reports; it never edits.
-AJS="$(ls "$PKG"/dist/assets/index-*.js 2>/dev/null | head -1 || true)"
+# Checked against the pristine bundle, which is the file the anchors describe;
+# patch 3 reports on its own copy, by match count, as it makes it.
+AJS="${ENTRY:-}"
 ACSS="$(ls "$PKG"/dist/assets/index-*.css 2>/dev/null | head -1 || true)"
 ok=0; miss=0
 check() {                            # check <label> <file> <literal>
@@ -285,10 +380,10 @@ if [[ -n $VER ]]; then
   check "accent variable"    "$ACSS" '--primary:'
   check "accent substitution" "$ACSS" 'blue-'
 fi
-if [[ -n $JVER ]]; then
-  check "panel deep links"   "$AJS"  'session/:sessionId'
-  check "panel auth token"   "$AJS"  'auth-token'
-fi
+# The Recent panel's two anchors are checked whether or not the pill is served:
+# the plugin tab mounts the same file, and that is the usual way in.
+check "panel deep links"   "$AJS"  'session/:sessionId'
+check "panel auth token"   "$AJS"  'auth-token'
 if (( miss )); then
   echo "anchors: $ok ok, $miss MISSING -- those overrides will not apply; see the kit README" >&2
 elif (( ok )); then
