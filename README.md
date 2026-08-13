@@ -134,6 +134,8 @@ way to tell the intended site from a coincidence — and the run says what it di
 frontend: 4/4 applied -- sidebar default, model description, conversation status, ctrl+enter to send
 ```
 
+A fifth appears only with steering on, and is described with it below.
+
 ## The model menu
 
 The menu takes two patches, and only one of them is in the bundle. Making it *render* a
@@ -157,9 +159,75 @@ The same pass drops options a deployment cannot serve — `CLOUDCLI_DROP_MODELS`
 in its description. The edit is brace-matched, checked with `node --check`, and reverted
 automatically if it would break syntax.
 
-**This is the one patch a browser reload does not pick up.** It is a server module, already in
-node's memory, so it lands on the next server start — which the launcher will not force while
-a session is live.
+**A browser reload does not pick this one up.** It is a server module, already in node's memory,
+so it lands on the next server start — which the launcher will not force while a session is
+live. The two patches below are server modules too, and land the same way.
+
+## A Stop that always stops
+
+Stop — the button, and Esc — calls the SDK's `interrupt()`, which is not a signal but a control
+request *written to the CLI's stdin*. For a single-user-turn query, which is every text-only
+turn here, the SDK closes that stdin at the first `result` it sees. A CLI that outlives its own
+result therefore has nowhere to answer from: the promise never settles, so the session is never
+removed, so the abort handler never returns and the client never receives its terminal
+`complete`. The UI sits on *processing*, Esc does nothing, and every later Stop wedges on the
+same session. Only a server restart clears it.
+
+So the patch gives the control request two seconds and then stops asking: it closes the
+transport, which needs no cooperation from the child. This one is not gated and not optional —
+it is a hang, and a transport whose child already answered is one the SDK closes next anyway.
+
+```
+[KIT] interrupt() unanswered for <session> (timed out); closing the transport
+```
+
+That line is the only sign it was needed. Stop working is what it looks like otherwise.
+
+## Steering a turn in flight
+
+```bash
+CLOUDCLI_STEER=1 cloudcli-start
+```
+
+Experimental, off by default, and the other side of the same coin as Stop. Upstream holds a
+message typed while a turn is running — it becomes a draft, sent once the run ends. But the
+stdin that carries `interrupt()` is open for the whole run: the SDK spawns the CLI with
+`--input-format stream-json` unconditionally, and the string-prompt path writes its one user
+frame without closing the pipe behind it. A frame pushed in after that is read at the next
+agent-loop boundary, in the **same** turn — the model changes course mid-run, no restart, no
+resume, nothing about how the turn was started has to change. Which is what makes it small.
+
+Three things it has to get right:
+
+- **Never let the queue end.** `streamInput()` calls `endInput()` when its iterable ends, which
+  closes the stdin that Stop needs. The queue is closed only from `removeSession()`, reached on
+  completion, error and abort — never under a live run.
+- **Skip turns carrying attachments.** Those are handed to the SDK as a generator whose end
+  closes stdin behind it, so a message pushed at one would vanish into a closed pipe. Only runs
+  started from a plain string prompt are marked steerable, read at the `query()` call site with
+  no `await` in between so the mark cannot drift to another run.
+- **Write the line down.** The CLI applies the frame but records nothing, and CloudCLI's history
+  *is* the CLI's transcript — there is no second copy anywhere. So the launcher appends the line
+  itself, in the shape a user turn has, chained onto the newest entry: the reader takes it for a
+  normal user message, and the CLI replays it on the next resume rather than continuing a
+  conversation it has no record of being redirected. Without this the steer is real but
+  invisible — the model reacts, and the message is gone on the next reload.
+
+The browser half is the fifth bundle substitution: the composer's busy guard learns one
+condition, so a send during a run goes out instead of becoming a draft. Even with the flag on it
+stays dormant until `__cloudcliSteer = true` in the console, so it can be tried and dropped
+without a restart.
+
+```
+chat: applied steering history, steering channel, steerable runs, steerable marker, steering
+cleanup, steering export, steering passthrough, steering route; 1 already in place
+[KIT] steering <session> mid-turn (32 chars)
+```
+
+Eight edits across three server modules, so it is all-or-nothing by construction — a facade
+naming a function that failed to be inserted is a ReferenceError at import, i.e. a server that
+does not start. And every one of them is **reversed** when the flag is off, back to byte-identical
+with what upstream shipped. Turning steering off is a restart, not a reinstall.
 
 ## Retuning the appearance
 
@@ -216,8 +284,9 @@ never edits.
   them — which would produce an install that imports fine and then fails on its first query.
   If the check trips it prints the `npm rebuild` line to fix it and starts nothing.
 - Everything is an environment knob, read on every start: `CLOUDCLI_PATCH_ONLY=1` (apply and
-  exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_DROP_MODELS`
-  (see above), and `CLOUDCLI_THEME` (a stylesheet somewhere other than `~/.config/cloudcli`).
+  exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_STEER=1`
+  (steering, see above), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
+  somewhere other than `~/.config/cloudcli`).
   `CLOUDCLI_PREFIX` and `CLOUDCLI_CONF` move the paths themselves, for an install that is not
   where the launcher looks.
 - Delete `~/.config/cloudcli/ide-theme.css` and the next launcher run cleanly un-links it. An

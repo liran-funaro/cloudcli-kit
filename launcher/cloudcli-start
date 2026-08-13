@@ -7,6 +7,14 @@
 #       Safe to run while a session is in progress -- the running server is
 #       untouched; the browser picks the changes up on its next reload.
 #
+#   CLOUDCLI_STEER=1 cloudcli-start
+#       Experimental (patch 5): let a message sent while a turn is running go
+#       INTO that turn instead of being held back as a draft, and record it in
+#       the CLI transcript so it survives a reload. Off by default.
+#       Even with it on the browser keeps upstream's behaviour until you flip
+#       `__cloudcliSteer = true` in the console, so it can be tried and dropped
+#       without a restart.
+#
 # The appearance this applies is not carried here. It lives in
 # ~/.config/cloudcli/ide-theme.css, seeded by install.sh from the cloudcli-kit
 # repo and never overwritten here -- so it survives package upgrades AND kit
@@ -23,6 +31,7 @@ CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
 SRC="${CLOUDCLI_THEME:-$CONF/ide-theme.css}"
 DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable best}"
 FRONTEND="${CLOUDCLI_FRONTEND:-1}"
+STEER="${CLOUDCLI_STEER:-0}"
 
 if [[ ! -d $PKG ]]; then
   echo "installing @cloudcli-ai/cloudcli into $PREFIX ..."
@@ -188,10 +197,10 @@ BJS=""
 if [[ -n ${ENTRY:-} && $FRONTEND == 1 ]]; then
   TD="$(mktemp -d)"
   # .mjs so `node --check` parses it as a module regardless of where it sits.
-  if python3 - "$ENTRY" "$TD/entry.mjs" <<'PY'
+  if python3 - "$ENTRY" "$TD/entry.mjs" "$STEER" <<'PY'
 import re, sys
 
-src, out = sys.argv[1], sys.argv[2]
+src, out, steer = sys.argv[1], sys.argv[2], sys.argv[3] == '1'
 s = open(src).read()
 applied, missing = [], []
 
@@ -277,6 +286,28 @@ if s.count(SEND) == 1:
     applied.append('ctrl+enter to send')
 else:
     missing.append('ctrl+enter to send (%d matches)' % s.count(SEND))
+
+# (5) Send-while-running, with CLOUDCLI_STEER=1 -- the browser half of patch 5.
+# Type into a turn that is still running and upstream holds the text back as a
+# draft, replaying it only once the turn ends; the server patch can instead push
+# it into the live turn, so a correction lands while it still matters. What that
+# takes here is letting the composer's busy branch fall through to the ordinary
+# send path -- which appends the bubble, clears the box and emits chat.send, all
+# of it already correct for a run in progress.
+#
+# Guarded on a global rather than compiled in: unset (the shipped state) is
+# upstream's behaviour exactly, and `__cloudcliSteer = true` in the console
+# turns it on for the tab, mid-session, with no reload. Matched structurally --
+# the busy flag, the override argument and the queue setter are all one-letter
+# minifier names that an upgrade will renumber, but the shape holds.
+if steer:
+    BUSY = re.compile(r'if\((\w+)\)\{if\((\w+)\)\{(\w+)\.current=(\w+),(\w+)\(\2\);return\}')
+    if len(BUSY.findall(s)) == 1:
+        s = BUSY.sub(r'if(\1&&!window.__cloudcliSteer){if(\2){\3.current=\4,\5(\2);'
+                     r'return}', s, count=1)
+        applied.append('send while running')
+    else:
+        missing.append('send while running (%d matches)' % len(BUSY.findall(s)))
 
 open(out, 'w').write(s)
 for m in missing:
@@ -464,6 +495,415 @@ PY
   else
     mv "$MP.prepatch" "$MP"
     echo "WARNING: the model-list patch failed, list left as upstream had it" >&2
+  fi
+fi
+
+# --- patch 4: a Stop that always stops -- and patch 5: steering ---------------
+# Both live in the server's chat path, so they are applied together, and like
+# patch 3 they land on the next server start rather than the next reload.
+#
+# Patch 4 (always on) fixes a hang. Stop calls the SDK's interrupt(), which is a
+# control request WRITTEN TO THE CLI'S STDIN -- and for a single-user-turn query,
+# which is every text-only turn here, the SDK closes stdin at the first `result`.
+# A CLI that outlives its own result therefore never answers: the promise never
+# settles, the session is never removed (so every later Stop wedges on the same
+# session), the abort handler never returns, and the client never receives its
+# terminal complete. The UI sits on "processing" and Esc does nothing until the
+# server is restarted. Give the control request two seconds, then close the
+# transport instead -- which needs no cooperation from the child.
+#
+# Patch 5 (CLOUDCLI_STEER=1) is the other side of the same coin: because stdin
+# is open while the turn runs, a user frame pushed into it is picked up at the
+# next agent-loop boundary, in the SAME turn. So a message typed mid-run can
+# steer the run instead of queueing behind it. Nothing about how the turn was
+# started has to change, which is what makes this small.
+#
+# The CLI applies such a frame but never writes it down, and CloudCLI's history
+# IS the CLI's transcript -- so patch 5 also appends the line there itself, in
+# the shape a user turn has. Without that the message vanishes on the next
+# reload, and the CLI resumes a conversation with no record of the redirection.
+#
+# The one trap: streamInput() calls endInput() when its iterable ENDS, closing
+# stdin -- which would take interrupt(), and with it Stop, down with it. The
+# queue therefore never ends on its own; it is closed from removeSession(),
+# which is reached only on completion, error and abort.
+#
+# Patch 5 is all-or-nothing across the three files by construction: a facade
+# naming a function that failed to be inserted is a ReferenceError at import,
+# i.e. a server that does not start. And every edit it makes is REVERSED when
+# the flag is off, so the flag is the whole switch -- turning steering off is a
+# restart, not a reinstall.
+RTP="$PKG/dist-server/server/modules/providers/list/claude/claude-runtime.provider.js"
+PRS="$PKG/dist-server/server/modules/providers/services/provider-runtime.service.js"
+CWS="$PKG/dist-server/server/modules/websocket/services/chat-websocket.service.js"
+if [[ -f $RTP && -f $PRS && -f $CWS ]]; then
+  kit_revert() { for f in "$RTP" "$PRS" "$CWS"; do mv -f "$f.prepatch" "$f"; done; }
+  for f in "$RTP" "$PRS" "$CWS"; do cp "$f" "$f.prepatch"; done
+  if python3 - "$RTP" "$PRS" "$CWS" "$STEER" <<'PY'
+import sys
+
+rtp, prs, cws, steer = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1'
+applied, already, missing, removed = [], [], [], []
+
+
+def edit(text, old, new, label, count=1):
+    """Apply one exact edit. Returns the new text, or None if the anchor moved.
+
+    Re-runnable: this script patches the installed file in place, so on every
+    start after the first the anchor is already gone and the result is already
+    there. That is success, not a miss -- and an upgrade, which restores the
+    file, comes back through the anchor path.
+    """
+    if text is None:
+        return None
+    if new in text:
+        already.append(label)
+        return text
+    if text.count(old) != count:
+        missing.append('%s (%d anchors)' % (label, text.count(old)))
+        return None
+    applied.append(label)
+    return text.replace(old, new, count)
+
+
+def unedit(text, old, new, label):
+    """Undo one edit. Cannot fail: absent means it was never applied."""
+    if new not in text:
+        return text
+    removed.append(label)
+    return text.replace(new, old)
+
+
+# --- patch 4 ----------------------------------------------------------------
+STOP = (                                                  # (old, new, label)
+    '        // Call interrupt() on the query instance\n'
+    '        await session.instance.interrupt();\n',
+    '        // Call interrupt() on the query instance. KIT: it is a control\n'
+    '        // request written to the CLI\'s stdin, which the SDK has already\n'
+    '        // closed if this run reached its first result -- then it never\n'
+    '        // answers and Stop wedges for good. Wait, then stop asking.\n'
+    '        const kitInterrupt = await Promise.race([\n'
+    '            session.instance.interrupt().then(() => \'done\', (error) => error),\n'
+    '            new Promise((resolve) => setTimeout(() => resolve(\'timeout\'), 2000)),\n'
+    '        ]);\n'
+    '        if (kitInterrupt !== \'done\') {\n'
+    '            console.warn(`[KIT] interrupt() unanswered for ${sessionId} '
+    '(${kitInterrupt === \'timeout\' ? \'timed out\' : kitInterrupt?.message || kitInterrupt});'
+    ' closing the transport`);\n'
+    '            try {\n'
+    '                session.instance.close?.();\n'
+    '            }\n'
+    '            catch (closeError) {\n'
+    '                console.error(`[KIT] close() failed for ${sessionId}:`, closeError);\n'
+    '            }\n'
+    '        }\n',
+    'stop always stops')
+
+# --- patch 5 ----------------------------------------------------------------
+# Raw: this is JS source, so a backslash in it belongs to the JS ('\n' is a
+# newline the emitted code writes, not one in this string).
+STEER_BLOCK = r'''// KIT: mid-turn steering -----------------------------------------------------
+// The SDK spawns the CLI with --input-format stream-json unconditionally, and
+// the string-prompt path writes one user frame without calling endInput(), so
+// stdin is still open while the turn runs. A user frame pushed into it is read
+// at the next agent-loop boundary -- the same turn, no restart, no resume.
+const kitSteerable = new WeakSet(); // runs whose stdin is still writable
+const kitInboxes = new WeakMap(); // run -> its push queue
+let kitPromptWasString = false;
+function kitTapPrompt(prompt) {
+    // A string prompt leaves stdin open. The generator payload (a turn carrying
+    // attachments) ends, and streamInput() closes stdin behind it, so those
+    // runs cannot be steered -- and must not be, or the message would vanish
+    // into a closed pipe. Read at the query() call site, with no await between
+    // here and the kitSteerable.add() below, so the flag cannot drift to
+    // another run.
+    kitPromptWasString = typeof prompt === 'string';
+    return prompt;
+}
+function kitPushQueue() {
+    // Yields on push and ends only when closed. Ending it would call
+    // endInput() and close the stdin that interrupt() needs.
+    const items = [];
+    let wake = null;
+    let closed = false;
+    return {
+        push(value) { items.push(value); wake?.(); wake = null; },
+        close() { closed = true; wake?.(); wake = null; },
+        async *[Symbol.asyncIterator]() {
+            for (;;) {
+                if (items.length) {
+                    yield items.shift();
+                    continue;
+                }
+                if (closed) {
+                    return;
+                }
+                await new Promise((resolve) => { wake = resolve; });
+            }
+        },
+    };
+}
+function kitCloseInbox(instance) {
+    const inbox = instance && kitInboxes.get(instance);
+    if (!inbox) {
+        return;
+    }
+    kitInboxes.delete(instance);
+    inbox.close();
+}
+/**
+ * KIT: writes a steered line into the CLI's own transcript.
+ *
+ * The CLI applies a mid-turn frame to the run in flight but records nothing, so
+ * after a reload the message is simply gone -- CloudCLI reads its history from
+ * that transcript and there is no second copy anywhere. Append it in the shape
+ * the CLI writes for a user turn, chained onto the newest entry: the reader
+ * takes it for a normal user message, and the CLI replays it on the next resume
+ * rather than continuing a conversation it has no record of being redirected.
+ * @param {string} sessionId - Session identifier
+ * @param {string} text - What was said to the run
+ * @param {string} timestamp - When it was said, ISO 8601, for history ordering
+ * @returns {Promise<void>} Resolves once the line is on disk
+ */
+async function kitRecordSteer(sessionId, text, timestamp) {
+    const jsonlPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
+    if (!jsonlPath) {
+        return;
+    }
+    // Only the tail is wanted: these transcripts reach tens of megabytes, and
+    // all that is needed from one is an entry to hang the new line off.
+    const handle = await fs.open(jsonlPath, 'r');
+    let tail = '';
+    let start = 0;
+    try {
+        const { size } = await handle.stat();
+        start = Math.max(0, size - 65536);
+        if (size > start) {
+            const buffer = Buffer.alloc(size - start);
+            await handle.read(buffer, 0, buffer.length, start);
+            tail = buffer.toString('utf8');
+        }
+    }
+    finally {
+        await handle.close();
+    }
+    const lines = tail.split('\n');
+    if (start > 0) {
+        lines.shift();              // the read began mid-line
+    }
+    let base = null;
+    for (let index = lines.length - 1; index >= 0 && !base; index--) {
+        const line = lines[index].trim();
+        if (!line) {
+            continue;
+        }
+        try {
+            const entry = JSON.parse(line);
+            if (entry?.uuid && entry.sessionId) {
+                base = entry;       // the newest entry that can be a parent
+            }
+        }
+        catch {
+            // A line still being written. The one before it will do.
+        }
+    }
+    if (!base) {
+        return;
+    }
+    // sessionId here is CloudCLI's; the transcript is keyed by the CLI's own,
+    // which is what the reader filters on -- so take that from the file.
+    const record = {
+        parentUuid: base.uuid,
+        isSidechain: false,
+        userType: base.userType || 'external',
+        cwd: base.cwd,
+        sessionId: base.sessionId,
+        version: base.version,
+        gitBranch: base.gitBranch,
+        entrypoint: base.entrypoint,
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+        promptSource: 'sdk',
+        promptId: base.promptId || crypto.randomUUID(),
+        uuid: crypto.randomUUID(),
+        timestamp,
+    };
+    // One line, one write: O_APPEND keeps it whole alongside the CLI's own
+    // appends. No trailing newline means the CLI is mid-write, so start one.
+    await fs.appendFile(jsonlPath,
+        (tail.endsWith('\n') ? '' : '\n') + JSON.stringify(record) + '\n');
+}
+/**
+ * KIT: hands a user message to a run that is already in flight.
+ * @param {string} sessionId - Session identifier
+ * @param {string} text - What to say to the run
+ * @returns {boolean} True if the CLI has it; false to fall back to refusing
+ */
+function injectIntoClaudeSDKSession(sessionId, text) {
+    const session = getSession(sessionId);
+    const instance = session?.instance;
+    if (!instance || session.status !== 'active') {
+        return false;
+    }
+    if (!kitSteerable.has(instance) || typeof instance.streamInput !== 'function') {
+        return false;
+    }
+    if (typeof text !== 'string' || !text.trim()) {
+        return false;
+    }
+    let inbox = kitInboxes.get(instance);
+    if (!inbox) {
+        inbox = kitPushQueue();
+        kitInboxes.set(instance, inbox);
+        // Settles only once the queue closes. A rejection means the CLI is
+        // already gone, which the run loop is about to notice by itself.
+        instance.streamInput(inbox).catch((error) => {
+            console.warn(`[KIT] steering channel closed for ${sessionId}:`, error?.message || error);
+        });
+    }
+    console.log(`[KIT] steering ${sessionId} mid-turn (${text.length} chars)`);
+    const timestamp = new Date().toISOString();
+    inbox.push({
+        type: 'user',
+        session_id: '',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+        parent_tool_use_id: null,
+    });
+    // Not awaited: the run already has the message, and whether it also ends up
+    // in the history must not decide whether steering reports success.
+    kitRecordSteer(sessionId, text, timestamp).catch((error) => {
+        console.warn(`[KIT] steered line not recorded for ${sessionId}:`, error?.message || error);
+    });
+    return true;
+}
+'''
+
+SESSION_MAP = '/**\n * Adds a session to the active sessions map\n'
+
+# (label, old, new, anchor count) -- run forward with CLOUDCLI_STEER=1 and in
+# reverse without it, so the flag alone decides, in both directions.
+MODELS_IMPORT = ("import { CLAUDE_PREDEFINED_MODELS } from "
+                 "'../../../../modules/providers/list/claude/claude-models.provider.js';\n")
+DB_IMPORT = "import { sessionsDb } from '../../../../modules/database/index.js';\n"
+RUNTIME = [
+    ('steering history',                # kitRecordSteer needs the transcript path
+     MODELS_IMPORT,
+     MODELS_IMPORT + DB_IMPORT, 1),
+    ('steering channel',
+     SESSION_MAP,
+     STEER_BLOCK + SESSION_MAP, 1),
+    ('steerable runs',
+     '                prompt: await createPrompt(),\n',
+     '                prompt: kitTapPrompt(await createPrompt()),\n',
+     2),                            # the hooked call and its hookless retry
+    ('steerable marker',
+     '        // Track the query instance for abort capability\n',
+     '        if (kitPromptWasString) {\n'
+     '            kitSteerable.add(queryInstance);\n'
+     '        }\n'
+     '        // Track the query instance for abort capability\n', 1),
+    ('steering cleanup',
+     'function removeSession(sessionId) {\n'
+     '    activeSessions.delete(sessionId);\n',
+     'function removeSession(sessionId) {\n'
+     '    // KIT: every caller of this means the run is over or being killed --\n'
+     '    // completion, error, abort -- which is exactly when the steering queue\n'
+     '    // may end. Closing it earlier would close stdin under a live run.\n'
+     '    kitCloseInbox(activeSessions.get(sessionId)?.instance);\n'
+     '    activeSessions.delete(sessionId);\n', 1),
+    ('steering export',
+     'export const claudeRuntime = {\n'
+     '    run: queryClaudeSDK,\n'
+     '    abort: abortClaudeSDKSession,\n',
+     'export const claudeRuntime = {\n'
+     '    run: queryClaudeSDK,\n'
+     '    abort: abortClaudeSDKSession,\n'
+     '    inject: injectIntoClaudeSDKSession,\n', 1),
+]
+SERVICE = [
+    ('steering passthrough',
+     '        async abort(providerName, sessionId) {\n',
+     '        // KIT: hand a message to a run already in flight. False means the\n'
+     '        // provider cannot take it, so the caller can refuse the send.\n'
+     '        inject(providerName, sessionId, text) {\n'
+     '            const runtime = dependencies.resolveProvider(providerName).runtime;\n'
+     '            return Boolean(runtime.inject?.(sessionId, text));\n'
+     '        },\n'
+     '        async abort(providerName, sessionId) {\n', 1),
+]
+REFUSE = ('    if (!run) {\n'
+          '        sendProtocolError(ws, \'RUN_IN_PROGRESS\', `Session "${sessionId}" '
+          'already has a run in progress.`, sessionId);\n')
+CHAT = [
+    ('steering route',
+     REFUSE,
+     '    if (!run) {\n'
+     '        // KIT: a send while the turn is running is steering, not an error.\n'
+     '        // The history write below belongs to a turn this process owns, so\n'
+     '        // it is not reached; the runtime records the line in the CLI\n'
+     '        // transcript instead, which is where a reload reads it back from.\n'
+     '        if (dependencies.runtime.inject?.(provider, sessionId, typeof data.content === \'string\' ? data.content : \'\')) {\n'
+     '            return;\n'
+     '        }\n' + REFUSE.split('\n', 1)[1], 1),
+]
+
+base = edit(open(rtp).read(), *STOP)
+if base is None:
+    sys.exit(1)                     # patch 4's own anchor moved; revert and warn
+runtime, service, chat = base, open(prs).read(), open(cws).read()
+
+if steer:
+    for label, old, new, count in RUNTIME:
+        runtime = edit(runtime, old, new, label, count)
+    for label, old, new, count in SERVICE:
+        service = edit(service, old, new, label, count)
+    for label, old, new, count in CHAT:
+        chat = edit(chat, old, new, label, count)
+    if None in (runtime, service, chat):
+        # Half of patch 5 is a server that does not start, so keep patch 4 and
+        # leave the other two files exactly as they were found. What is already
+        # installed stays harmless either way: every call into the missing half
+        # goes through `?.`, so it reads as "cannot steer" and the send is
+        # refused the way upstream refuses it.
+        print('  steering NOT applied -- anchors moved; the Stop fix stands alone',
+              file=sys.stderr)
+        runtime, service, chat = base, None, None
+else:
+    for label, old, new, _ in RUNTIME:
+        runtime = unedit(runtime, old, new, label)
+    for label, old, new, _ in SERVICE:
+        service = unedit(service, old, new, label)
+    for label, old, new, _ in CHAT:
+        chat = unedit(chat, old, new, label)
+
+open(rtp, 'w').write(runtime)
+if service is not None:
+    open(prs, 'w').write(service)
+if chat is not None:
+    open(cws, 'w').write(chat)
+
+report = []
+if applied:
+    report.append('applied ' + ', '.join(applied))
+if removed:
+    report.append('removed ' + ', '.join(removed))
+if already:
+    report.append('%d already in place' % len(already))
+for m in missing:
+    print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
+print('chat: %s' % ('; '.join(report) or 'nothing to do'))
+PY
+  then
+    if node --check "$RTP" >/dev/null 2>&1 && node --check "$PRS" >/dev/null 2>&1 \
+       && node --check "$CWS" >/dev/null 2>&1; then
+      rm -f "$RTP.prepatch" "$PRS.prepatch" "$CWS.prepatch"
+    else
+      kit_revert
+      echo "WARNING: the chat patch broke syntax, reverted" >&2
+    fi
+  else
+    kit_revert
+    echo "WARNING: the chat patch failed, chat left as upstream had it" >&2
   fi
 fi
 
