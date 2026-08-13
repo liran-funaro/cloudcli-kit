@@ -1,0 +1,174 @@
+/* ---------------------------------------------------------------------------
+   CloudCLI appearance overrides, ported from my editor configuration
+   (VS Code  ->  User/settings.json) so the two look the same side by side.
+
+     surfaces    Cotion Theme dark palette (workbench.colorTheme)
+     accent      Cotion focusBorder / button.background / badge.background
+     text        workbench.colorCustomizations: foreground #ffffff,
+                 editor.foreground #f5f5f5, chat.{request,response}Foreground
+     chat type   chat.fontSize 16, chat.fontFamily,
+                 markdown.preview.lineHeight 1.6
+     code type   editor.fontFamily (JetBrains Mono) at editor.fontSize 14
+     layout      full width -- upstream caps the column with Tailwind max-w-*
+
+   CSS only; changes no application behaviour.
+
+   install.sh copies this file to ~/.config/cloudcli/ide-theme.css, and
+   cloudcli-start copies THAT into the package on every start -- so an upgrade
+   cannot revert it, and one generated section is appended: the accent
+   substitution described below.
+
+   To retune: edit ~/.config/cloudcli/ide-theme.css, then re-run
+   CLOUDCLI_PATCH_ONLY=1 cloudcli-start -- no service restart needed, safe
+   mid-session, reload the browser to see it. Copy the result back here to keep
+   the repo the source of truth.
+   --------------------------------------------------------------------------- */
+
+/* --- surfaces -------------------------------------------------------------
+   Upstream's dark page is hsl(0 0% 8%) = #141414, darker than any common
+   editor theme. These are Cotion's own values.                            */
+.dark {
+  --background: 0 0% 12.5%;          /* editor.background       #202020 */
+  --card: 0 0% 16.5%;                /* editorWidget.background #2a2a2a */
+  --popover: 0 0% 16.5%;
+  --secondary: 0 0% 20.4%;           /* input.background        #343434 */
+  --muted: 0 0% 20.4%;
+  --accent: 0 0% 20.4%;
+  --input: 0 0% 20.4%;
+  --border: 0 0% 18.4%;              /* panel.border            #2f2f2f */
+
+  /* The IDE's brightened foregrounds (Cotion ships a dim #c3c3c3). */
+  --foreground: 0 0% 100%;
+  --card-foreground: 0 0% 100%;
+  --popover-foreground: 0 0% 100%;
+  --secondary-foreground: 0 0% 100%;
+  --accent-foreground: 0 0% 100%;
+  /* The dimmest text in the UI; upstream 60% is the one value with no IDE
+     equivalent, raised here in the same spirit as the overrides above. */
+  --muted-foreground: 0 0% 78%;
+
+  /* Keep the translucent nav in step with the surfaces above. */
+  --nav-glass-bg: 0 0% 16.5% / .55;
+  --nav-float-ring: 0 0% 20.4% / .3;
+  --nav-divider-color: 0 0% 18.4% / .5;
+  --nav-input-bg: 0 0% 20.4% / .5;
+
+  /* --- accent ------------------------------------------------------------
+     Cotion's focusBorder / button.background / badge.background, replacing
+     upstream's hsl(217.2 91.2% 59.8%). Change it HERE only: cloudcli-start
+     reads --primary back out of this file and derives the blue-utility
+     substitution appended to the served copy from it.
+     --primary-foreground stays upstream's near-black -- on #2eaadc that is
+     7:1, where white would be 2.7:1.                                     */
+  --primary: 197 71% 52%;            /* focusBorder             #2eaadc */
+  --ring: 197 71% 52%;
+  --nav-tab-glow: 197 71% 52% / .25;
+  --nav-tab-ring: 197 71% 52% / .15;
+  --nav-input-focus-ring: 197 71% 52% / .25;
+}
+
+/* --- chat typography ------------------------------------------------------
+   Upstream renders every message as .font-serif .prose-sm, i.e. 14px
+   Merriweather serif. The IDE uses a 16px system sans for chat.
+   font-size is in rem, so it also wins inside the text-sm user bubbles.
+
+   The two sizes pull in opposite directions on purpose: the conversation is
+   for reading, the project sidebar is for fitting things on screen.      */
+:root {
+  --ide-chat-font-size: 1.125rem;    /* 18px; chat.fontSize 16 was the port */
+  --ide-sidebar-zoom: .875;          /* 14/16 -- more sessions per screen  */
+}
+.font-serif {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica,
+               Arial, sans-serif;
+}
+.prose-sm {
+  font-size: 1rem;                   /* other prose panels: help, plans, ... */
+  line-height: 1.6;                  /* markdown.preview.lineHeight */
+}
+/* Message bodies only -- every chat variant carries .font-serif, and the
+   plain-text user bubble is .break-words.font-serif.text-sm. */
+.prose.font-serif,
+.font-serif[class~="text-sm"] {
+  font-size: var(--ide-chat-font-size);
+}
+/* Code blocks stay at editor.fontSize whatever the body does, which is what
+   the editor itself does: inline code follows the prose, blocks do not. */
+.dark .prose pre {
+  font-size: .875rem;                /* editor.fontSize 14 */
+}
+/* The project/session sidebar, the app's only md:w-72 element. zoom scales
+   padding, icons and rows together, so density genuinely improves; a
+   font-size cannot -- every utility inside is an absolute rem. */
+[class*="md:w-72"] {
+  zoom: var(--ide-sidebar-zoom);
+}
+
+/* --- chat body colours ----------------------------------------------------
+   Tailwind Typography carries its own palette, so the variables above never
+   reach message text. .dark .prose (0,2,0) outranks upstream's .prose-invert
+   and .prose-gray (0,1,0) whatever the order.                             */
+.dark .prose {
+  --tw-prose-body: #f5f5f5;          /* editor.foreground */
+  --tw-prose-headings: #ffffff;
+  --tw-prose-bold: #ffffff;
+  --tw-prose-lead: #e0e0e0;
+  --tw-prose-quotes: #f5f5f5;
+  --tw-prose-captions: #c7c7c7;
+  --tw-prose-counters: #c7c7c7;
+  --tw-prose-bullets: #8a8a8a;       /* upstream #4b5563 vanishes on #202020 */
+  --tw-prose-hr: #3a3a3a;
+  --tw-prose-quote-borders: #3a3a3a;
+  --tw-prose-th-borders: #4a4a4a;
+  --tw-prose-td-borders: #3a3a3a;
+  --tw-prose-code: #ffffff;
+  --tw-prose-pre-code: #f5f5f5;
+  --tw-prose-pre-bg: #2a2a2a;        /* upstream rgb(0 0 0/50%) reads as a hole */
+}
+
+/* --- code ----------------------------------------------------------------
+   Prose sizes code at .875em, so a 16px body lands on 14px = editor.fontSize.
+   JetBrains Mono must be installed on the machine running the browser.   */
+code, pre, kbd, samp, .font-mono {
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular,
+               Menlo, Consolas, monospace;
+}
+
+/* --- inline code ---------------------------------------------------------
+   Upstream gives a `code` span the body colour, no chip, and .857em -- so it
+   is smaller than the prose around it and reads as an ordinary word. The
+   colours are the IDE's: Cotion leaves textPreformat unset, so the editor
+   falls back to the product's dark defaults, #D7BA7D on 10% white.
+   :where() keeps the prose-invert filters at zero specificity, so the
+   inherit rule at the end still wins where upstream wants inheritance.   */
+.dark .prose :not(pre) > code {
+  font-size: .9375em;                /* 15px against the 16px body */
+  font-weight: 500;                  /* 600 is heavy on a mono face */
+  padding: .1em .3em;
+  border-radius: 4px;
+  word-break: normal;                /* upstream break-all splits identifiers
+                                        at any character, mid-flag, mid-path */
+  overflow-wrap: break-word;
+}
+.dark .prose:where(:not([class~="prose-invert"])) :not(pre) > code {
+  color: #d7ba7d;                    /* textPreformat.foreground, dark */
+  background: #ffffff1a;             /* textPreformat.background, dark */
+}
+/* Your own messages are prose-invert on the accent, where that tan has
+   nothing to sit on: keep the text white and darken the chip instead. */
+.dark .prose:where([class~="prose-invert"]) :not(pre) > code {
+  color: #ffffff;
+  background: #00000040;
+}
+/* Headings, links, quotes and table headers inherit their colour upstream,
+   deliberately -- a chip inside them would fight the surrounding text. */
+.dark .prose :is(h1, h2, h3, h4, a, blockquote, thead th) code {
+  color: inherit;
+  background: none;
+  padding: 0;
+}
+
+/* --- layout --------------------------------------------------------------
+   Upstream caps the chat column with Tailwind max-w-* (2xl 672px .. 7xl
+   1280px), wasting most of a wide display.                              */
+[class*="max-w-"] { max-width: 100% !important; }

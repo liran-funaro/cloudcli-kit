@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# Launch CloudCLI (Claude Code web UI) on loopback, re-applying local patches
+# every start so a package upgrade cannot silently revert them.
+#
+#   CLOUDCLI_PATCH_ONLY=1 cloudcli-start
+#       Apply the patches to the installed files and exit, starting nothing.
+#       Safe to run while a session is in progress -- the running server is
+#       untouched; the browser picks the changes up on its next reload.
+#
+# This script applies; it does not carry content. The files it installs live in
+# ~/.config/cloudcli/, seeded by install.sh from the cloudcli-kit repo, and are
+# never overwritten here -- so they survive package upgrades AND kit updates,
+# and this script has no second copy of them to drift from.
+#
+#   ide-theme.css   appearance: surfaces, accent, typography, full width
+#   ide-recent.js   the "Recent" pill (the same file the plugin uses)
+#
+# Delete either one and the next run cleanly un-links it.
+set -euo pipefail
+
+PREFIX="${CLOUDCLI_PREFIX:-$HOME/.npm-global}"
+PKG="$PREFIX/lib/node_modules/@cloudcli-ai/cloudcli"
+CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
+SRC="${CLOUDCLI_THEME:-$CONF/ide-theme.css}"
+JSRC="${CLOUDCLI_RECENT:-$CONF/ide-recent.js}"
+DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable}"
+
+if [[ ! -d $PKG ]]; then
+  echo "installing @cloudcli-ai/cloudcli into $PREFIX ..."
+  npm install -g --prefix "$PREFIX" @cloudcli-ai/cloudcli >/dev/null 2>&1
+fi
+[[ -d $PKG ]] || { echo "install failed: $PKG missing" >&2; exit 1; }
+
+# The copies land at the dist ROOT, deliberately not appended to the hashed
+# assets in dist/assets/: the service worker (dist/sw.js) is cache-first for
+# /assets/ and network-first for everything else, so a file here is never
+# served from a stale service-worker cache.
+CSS="$PKG/dist/ide-theme.css"
+JS="$PKG/dist/ide-recent.js"
+VER=""
+JVER=""
+
+# --- patch 1: appearance (colours, chat typography, full width) --------------
+if [[ -f $SRC ]]; then
+  cp -f "$SRC" "$CSS"
+
+  # Recolouring --primary is not enough on its own: the app also hardcodes
+  # Tailwind blue utilities (bg-blue-600, text-blue-400, ...) that no variable
+  # reaches, so the UI would come out two-toned. Append a substitution for
+  # every blue utility the bundle defines, moving each one to the --primary hue
+  # at its own relative luminance -- so contrast against the surfaces behind it
+  # is preserved by construction rather than guessed. Generated on each start
+  # because an upgrade can add utilities; delete --primary from the stylesheet
+  # and this whole step disappears.
+  APP_CSS="$(ls "$PKG"/dist/assets/index-*.css 2>/dev/null | head -1 || true)"
+  if [[ -n ${APP_CSS:-} ]]; then
+    ACC="$(mktemp)"
+    python3 - "$APP_CSS" "$CSS" >"$ACC" <<'PY'
+import re, sys
+
+app_css, theme_css = sys.argv[1], sys.argv[2]
+m = re.search(r'--primary:\s*([\d.]+)\s+([\d.]+)%', open(theme_css).read())
+if not m:
+    sys.exit(0)                                  # accent not overridden
+HUE, SAT = float(m.group(1)), float(m.group(2)) / 100
+
+def lin(c):
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+def luminance(rgb):
+    r, g, b = (lin(c / 255) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+def hsl(l):
+    c = (1 - abs(2 * l - 1)) * SAT
+    h = HUE / 60
+    x = c * (1 - abs(h % 2 - 1))
+    r, g, b = [(c, x, 0), (x, c, 0), (0, c, x),
+               (0, x, c), (x, 0, c), (c, 0, x)][int(h) % 6]
+    return tuple(round((v + l - c / 2) * 255) for v in (r, g, b))
+
+def accent(rgb):                                 # new hue, same luminance
+    target, lo, hi = luminance(rgb), 0.0, 1.0
+    for _ in range(24):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if luminance(hsl(mid)) < target else (lo, mid)
+    return hsl((lo + hi) / 2)
+
+def rules(css):
+    """(at-rule stack, selector, declarations) for every rule, nesting kept."""
+    stack, head, i = [], '', 0
+    while i < len(css):
+        ch = css[i]
+        if ch == '{':
+            if head.strip().startswith('@'):
+                stack.append(head.strip())
+            else:
+                end = css.find('}', i)           # no nested braces in a block
+                if end < 0:
+                    return
+                yield tuple(stack), head.strip(), css[i + 1:end]
+                i = end
+            head = ''
+        elif ch == '}':
+            head = ''
+            if stack:
+                stack.pop()
+        elif ch == ';':
+            head = ''
+        else:
+            head += ch
+        i += 1
+
+RGB = re.compile(r'rgb\(\s*(\d+)\s+(\d+)\s+(\d+)(\s*/[^)]*)?\)')
+HEX = re.compile(r'#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?')
+sub_rgb = lambda m: 'rgb(%d %d %d%s)' % (accent(tuple(int(g) for g in m.groups()[:3]))
+                                         + (m.group(4) or '',))
+sub_hex = lambda m: '#%02x%02x%02x%s' % (accent(tuple(int(m.group(1)[i:i + 2], 16)
+                                                      for i in (0, 2, 4)))
+                                         + (m.group(2) or '',))
+
+out = []
+for ats, sel, decl in rules(open(app_css).read()):
+    if 'blue-' not in sel:
+        continue
+    new = HEX.sub(sub_hex, RGB.sub(sub_rgb, decl))
+    if new == decl:
+        continue
+    # The uniform .dark prefix adds one class to every selector, so it outranks
+    # the original while keeping the rules' order among themselves; !important
+    # keeps that order decided by specificity, as it was upstream.
+    line = '.dark %s{%s}' % (sel, ';'.join(d.strip() + ' !important'
+                                           for d in new.split(';') if d.strip()))
+    for at in reversed(ats):
+        line = '%s{%s}' % (at, line)
+    out.append(line)
+
+if out:
+    print('\n/* --- accent, derived from --primary by cloudcli-start --------------')
+    print('   %d hardcoded Tailwind blue rules, rehued at equal luminance.' % len(out))
+    print('   Regenerated on every start -- edit --primary above, not this. */')
+    print('\n'.join(out))
+PY
+    cat "$ACC" >>"$CSS"; rm -f "$ACC"
+  fi
+
+  # The server sends Cache-Control: immutable for every static file, so the
+  # <link> needs a version query or an edited stylesheet stays pinned in the
+  # browser cache. Hash the served copy, accent section included.
+  VER="$(md5sum "$CSS" | cut -c1-8)"
+else
+  rm -f "$CSS"
+  echo "no stylesheet at $SRC -- skipping appearance (run install.sh from cloudcli-kit)"
+fi
+
+# --- patch 2: recent conversations, across every project ---------------------
+# The same file the plugin ships as its entry. Loaded as type="module" because
+# it branches on import.meta.url: a blob: URL means the plugin host is mounting
+# it as a tab, anything else means show the floating pill.
+if [[ -f $JSRC ]]; then
+  cp -f "$JSRC" "$JS"
+  JVER="$(md5sum "$JS" | cut -c1-8)"
+else
+  rm -f "$JS"
+fi
+
+# --- link both into index.html ----------------------------------------------
+# Each tag is removed and re-inserted rather than edited in place, so the
+# indentation comes out right whatever an upgrade does to index.html, an empty
+# version cleanly un-links, and unchanged input gives unchanged output.
+IDX="$PKG/dist/index.html"
+if [[ -f $IDX ]]; then
+  python3 - "$IDX" "$VER" "$JVER" <<'PY'
+import re, sys
+path, ver, jver = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(path).read()
+out = src
+
+def before_head(s, tag):
+    m = re.search(r'([ \t]*)</head>', s)
+    if not m:
+        return s + tag + '\n'
+    return s[:m.start()] + m.group(1) + '  ' + tag + '\n' + s[m.start():]
+
+# Drop any cache-busting query left by earlier versions of this script: the
+# overrides no longer live inside the hashed asset, so its URL is canonical.
+out = re.sub(r'(href="/assets/[^"?]*\.css)\?[^"]*"', r'\1"', out)
+
+out = re.sub(r'[ \t]*<link rel="stylesheet" href="/ide-theme\.css[^"]*"[^>]*>\n?', '', out)
+if ver:
+    tag = '<link rel="stylesheet" href="/ide-theme.css?v=%s" />' % ver
+    # After the app stylesheet, so equal-specificity rules win on order.
+    m = re.search(r'([ \t]*)<link rel="stylesheet"[^>]*href="/assets/[^"]*\.css"[^>]*>\n', out)
+    if m:
+        out = out[:m.end()] + m.group(1) + tag + '\n' + out[m.end():]
+    else:
+        out = before_head(out, tag)
+
+out = re.sub(r'[ \t]*<script[^>]*src="/ide-recent\.js[^"]*"[^>]*></script>\n?', '', out)
+if jver:
+    out = before_head(out, '<script type="module" src="/ide-recent.js?v=%s"></script>' % jver)
+
+state = ', '.join(filter(None, [
+    'ide-theme.css?v=%s' % ver if ver else '',
+    'ide-recent.js?v=%s' % jver if jver else '',
+])) or 'nothing'
+if out != src:
+    open(path, 'w').write(out)
+    print('linked %s' % state)
+else:
+    print('%s already linked' % state)
+PY
+fi
+
+# --- patch 3: hide model options this deployment cannot serve ---------------
+MP="$PKG/dist-server/server/modules/providers/list/claude/claude-models.provider.js"
+for M in $DROP_MODELS; do
+  if [[ -f $MP ]] && grep -q "value: '$M'" "$MP"; then
+    cp "$MP" "$MP.prepatch"
+    python3 - "$MP" "$M" <<'PY'
+import sys
+path, model = sys.argv[1], sys.argv[2]
+s = open(path).read()
+i = s.index("value: '%s'" % model)
+start = s.rindex('{', 0, i)
+depth, j = 0, start
+while j < len(s):
+    if s[j] == '{': depth += 1
+    elif s[j] == '}':
+        depth -= 1
+        if depth == 0: break
+    j += 1
+end = j + 1
+while end < len(s) and s[end] in ' ,\n\r\t':
+    end += 1
+open(path, 'w').write(s[:start] + s[end:])
+PY
+    if node --check "$MP" >/dev/null 2>&1; then
+      rm -f "$MP.prepatch"; echo "removed model option: $M"
+    else
+      mv "$MP.prepatch" "$MP"; echo "WARNING: removing '$M' broke syntax, reverted" >&2
+    fi
+  fi
+done
+
+# --- anchor self-check ------------------------------------------------------
+# Every patch above hangs off something upstream happens to do: a Tailwind
+# class, a CSS variable, a localStorage key. None of that is a published
+# interface, so an upgrade can move one and the patch would go quietly
+# ineffective -- the one genuine weakness of patching over forking. Check them
+# by name so a silent failure becomes a loud one. This reports; it never edits.
+AJS="$(ls "$PKG"/dist/assets/index-*.js 2>/dev/null | head -1 || true)"
+ACSS="$(ls "$PKG"/dist/assets/index-*.css 2>/dev/null | head -1 || true)"
+ok=0; miss=0
+check() {                            # check <label> <file> <literal>
+  [[ -n $2 && -f $2 ]] || { echo "  MISSING: $1 (no such bundle)"; miss=$((miss + 1)); return; }
+  if grep -qF -- "$3" "$2"; then
+    ok=$((ok + 1))
+  else
+    echo "  MISSING: $1 -- upstream no longer has '$3'"
+    miss=$((miss + 1))
+  fi
+}
+if [[ -n $VER ]]; then
+  check "sidebar density"    "$AJS"  'md:w-72'
+  check "chat font size"     "$AJS"  'font-serif'
+  check "inline-code chip"   "$AJS"  'prose-invert'
+  check "accent variable"    "$ACSS" '--primary:'
+  check "accent substitution" "$ACSS" 'blue-'
+fi
+if [[ -n $JVER ]]; then
+  check "panel deep links"   "$AJS"  'session/:sessionId'
+  check "panel auth token"   "$AJS"  'auth-token'
+fi
+if (( miss )); then
+  echo "anchors: $ok ok, $miss MISSING -- those overrides will not apply; see the kit README" >&2
+elif (( ok )); then
+  echo "anchors: $ok/$ok ok"
+fi
+
+if [[ ${CLOUDCLI_PATCH_ONLY:-0} == 1 ]]; then
+  echo "patches applied; server not started (CLOUDCLI_PATCH_ONLY=1)"
+  exit 0
+fi
+
+exec env HOST="${HOST:-127.0.0.1}" PORT="${PORT:-3001}" "$PREFIX/bin/cloudcli"

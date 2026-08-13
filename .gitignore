@@ -1,0 +1,23 @@
+# Nothing here needs a build, so this list exists to keep local machine state --
+# and anything credential-shaped -- from ever becoming a commit.
+
+# Backups install.sh leaves behind when it replaces a file you had edited.
+*.bak-*
+*.prepatch
+
+# Retuned copies kept next to the tracked one while experimenting.
+*.local
+*.local.*
+
+# Credentials never belong in this repo: it holds a stylesheet, a script and a
+# plugin, none of which authenticate anything. The panel reads the app's own
+# bearer token out of localStorage at call time and sends it same-origin only.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+id_rsa*
+.netrc
+
+.DS_Store
