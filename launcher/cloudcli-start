@@ -7,30 +7,21 @@
 #       Safe to run while a session is in progress -- the running server is
 #       untouched; the browser picks the changes up on its next reload.
 #
-#   CLOUDCLI_PILL=1 cloudcli-start
-#       Also serve the Recent list as a floating pill (Alt+R) on every page.
-#       Off by default: the plugin's own tab already shows that list, and two
-#       ways in is one more than the list is worth.
+# The appearance this applies is not carried here. It lives in
+# ~/.config/cloudcli/ide-theme.css, seeded by install.sh from the cloudcli-kit
+# repo and never overwritten here -- so it survives package upgrades AND kit
+# updates, and this script has no second copy of it to drift from. Delete it
+# and the next run cleanly un-links it.
 #
-# This script applies; it does not carry content. The files it installs live in
-# ~/.config/cloudcli/, seeded by install.sh from the cloudcli-kit repo, and are
-# never overwritten here -- so they survive package upgrades AND kit updates,
-# and this script has no second copy of them to drift from.
-#
-#   ide-theme.css   appearance: surfaces, accent, typography, full width
-#   ide-recent.js   the Recent list -- the plugin's entry file; served as a
-#                   page script only when CLOUDCLI_PILL=1
-#
-# Delete either one and the next run cleanly un-links it.
+# What this script does carry is the model-description table in patch 3, which
+# is content by necessity: nothing on the machine knows what a model costs.
 set -euo pipefail
 
 PREFIX="${CLOUDCLI_PREFIX:-$HOME/.npm-global}"
 PKG="$PREFIX/lib/node_modules/@cloudcli-ai/cloudcli"
 CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
 SRC="${CLOUDCLI_THEME:-$CONF/ide-theme.css}"
-JSRC="${CLOUDCLI_RECENT:-$CONF/ide-recent.js}"
-DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable}"
-PILL="${CLOUDCLI_PILL:-0}"
+DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable best}"
 FRONTEND="${CLOUDCLI_FRONTEND:-1}"
 
 if [[ ! -d $PKG ]]; then
@@ -61,9 +52,12 @@ done
 # /assets/ and network-first for everything else, so a file here is never
 # served from a stale service-worker cache.
 CSS="$PKG/dist/ide-theme.css"
-JS="$PKG/dist/ide-recent.js"
 VER=""
-JVER=""
+
+# An earlier version of this script could also serve the Recent list as a
+# floating pill. It is gone -- the plugin's own tab is the way in -- so clear
+# the copy it served; index.html's tag for it is dropped below.
+rm -f "$PKG/dist/ide-recent.js"
 
 # --- patch 1: appearance (colours, chat typography, full width) --------------
 if [[ -f $SRC ]]; then
@@ -178,22 +172,10 @@ else
   echo "no stylesheet at $SRC -- skipping appearance (run install.sh from cloudcli-kit)"
 fi
 
-# --- patch 2: recent conversations as a floating pill (opt-in) ---------------
-# The same file the plugin ships as its entry. Loaded as type="module" because
-# it branches on import.meta.url: a blob: URL means the plugin host is mounting
-# it as a tab, anything else means show the floating pill. The plugin tab is
-# the primary way in, so this is off unless CLOUDCLI_PILL=1 asks for it.
-if [[ -f $JSRC && $PILL == 1 ]]; then
-  cp -f "$JSRC" "$JS"
-  JVER="$(md5sum "$JS" | cut -c1-8)"
-else
-  rm -f "$JS"
-fi
-
-# --- patch 3: two frontend behaviours with no setting behind them ------------
-# Both are one-token changes in the app bundle, so they are made in a COPY:
-# the upstream index-*.js is never written to, which makes this idempotent by
-# construction and leaves an untouched original to fall back to.
+# --- patch 2: frontend behaviours with no setting behind them ----------------
+# Three small changes in the app bundle, each made in a COPY: the upstream
+# index-*.js is never written to, which makes this idempotent by construction
+# and leaves an untouched original to fall back to.
 #
 # The copy is content-addressed (ide-<md5>.js) rather than patched in place
 # because the server sends Cache-Control: immutable for /assets/ and the
@@ -240,6 +222,47 @@ if len(ITEM.findall(s)) == 1:
 else:
     missing.append('model description (%d matches)' % len(ITEM.findall(s)))
 
+# (3) The Conversations list gives no sign of which sessions are working, while
+# the Projects and Running lists both draw a dot for it. The app has the state
+# -- a Map of processing sessions and a Set of ones awaiting an answer -- and
+# the list's call site already reads two other fields off the very props object
+# that holds them. So: pass them, receive them, draw the app's own indicator.
+# Three anchors that only mean anything together, so they apply together.
+PS, AT = '_kitProcessing', '_kitAttention'       # names the minifier won't emit
+ATT = '%s?.has(\\3.sessionId)' % AT
+DOT = ('%s?.has(\\3.sessionId)||%s?s.jsx("span",{role:"status",'
+       'title:%s?"Session needs attention":"Working",'
+       '"aria-label":%s?"Session needs attention":"Working",'
+       'className:"h-2 w-2 flex-shrink-0 animate-pulse rounded-full "+'
+       '(%s?"bg-amber-500":"bg-green-500")}):null,' % (PS, ATT, ATT, ATT, ATT))
+CONV = [
+    # hand the state to the list, off the props object it already reads from
+    (re.compile(r'currentTime:(\w+)\.currentTime,onConversationSelect:'),
+     r'currentTime:\1.currentTime,activeSessions:\1.activeSessions,'
+     r'attentionSessionIds:\1.attentionSessionIds,onConversationSelect:'),
+    # receive it there
+    (re.compile(r'hasError:(\w+),selectedSession:(\w+),currentTime:(\w+),'
+                r'onConversationSelect:'),
+     r'hasError:\1,selectedSession:\2,currentTime:\3,'
+     'activeSessions:%s,attentionSessionIds:%s,onConversationSelect:' % (PS, AT)),
+    # and draw the dot at the end of each row, ahead of its chevron
+    (re.compile(r'(s\.jsx\((\w+),\{className:"h-3\.5 w-3\.5 flex-shrink-0 '
+                r'text-muted-foreground/40 transition-transform '
+                r'group-hover:translate-x-0\.5 '
+                r'group-hover:text-muted-foreground"\}\)\]\},(\w+)\.sessionId\))'),
+     DOT + r'\1'),
+]
+counts = [len(p.findall(s)) for p, _ in CONV]
+taken = [n for n in (PS, AT) if re.search(r'\b%s\b' % n, s)]
+if counts == [1, 1, 1] and not taken:
+    for pat, rep in CONV:
+        s = pat.sub(rep, s, count=1)
+    applied.append('conversation status')
+else:
+    missing.append('conversation status (%s matches%s)'
+                   % ('/'.join(str(c) for c in counts),
+                      ', name %s taken' % ','.join(taken) if taken else ''))
+
 open(out, 'w').write(s)
 for m in missing:
     print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
@@ -270,9 +293,9 @@ find "$PKG/dist/assets" -maxdepth 1 -name 'ide-*.js' \
 # version cleanly un-links, and unchanged input gives unchanged output.
 IDX="$PKG/dist/index.html"
 if [[ -f $IDX ]]; then
-  python3 - "$IDX" "$VER" "$JVER" "$(basename "${ENTRY:-}")" "$BJS" <<'PY'
+  python3 - "$IDX" "$VER" "$(basename "${ENTRY:-}")" "$BJS" <<'PY'
 import re, sys
-path, ver, jver, entry, bjs = sys.argv[1:6]
+path, ver, entry, bjs = sys.argv[1:5]
 src = open(path).read()
 out = src
 
@@ -305,13 +328,12 @@ if ver:
     else:
         out = before_head(out, tag)
 
+# Strip the tag an earlier version of this script used to add for the floating
+# pill, so a machine that ran that version stops loading it.
 out = re.sub(r'[ \t]*<script[^>]*src="/ide-recent\.js[^"]*"[^>]*></script>\n?', '', out)
-if jver:
-    out = before_head(out, '<script type="module" src="/ide-recent.js?v=%s"></script>' % jver)
 
 state = ', '.join(filter(None, [
     'ide-theme.css?v=%s' % ver if ver else '',
-    'ide-recent.js?v=%s' % jver if jver else '',
     'assets/%s' % bjs if bjs else '',
 ])) or 'nothing'
 if out != src:
@@ -322,36 +344,113 @@ else:
 PY
 fi
 
-# --- patch 4: hide model options this deployment cannot serve ---------------
+# --- patch 3: the model picker ------------------------------------------------
+# Two edits to the server's own list of model options: drop the ones this
+# deployment cannot serve, and say in each description which model the option
+# resolves to and what it costs. The CLI's picker tells you both; CloudCLI's
+# told you neither, and "Best available" went as far as offering Fable 5 on a
+# deployment that had just dropped it.
+#
+# Prices are Anthropic's published list rates per million tokens, input/output,
+# as of 2026-08 -- the standard ones, so Sonnet's introductory $2/$10 (to
+# 2026-08-31) is not shown. A gateway or a subscription may bill differently:
+# this table is the place to correct that.
+#
+# This is the one patch a browser reload does not pick up. The list is a server
+# module, already in node's memory, so it lands on the next server start.
 MP="$PKG/dist-server/server/modules/providers/list/claude/claude-models.provider.js"
-for M in $DROP_MODELS; do
-  if [[ -f $MP ]] && grep -q "value: '$M'" "$MP"; then
-    cp "$MP" "$MP.prepatch"
-    python3 - "$MP" "$M" <<'PY'
-import sys
-path, model = sys.argv[1], sys.argv[2]
+if [[ -f $MP ]]; then
+  cp "$MP" "$MP.prepatch"
+  if python3 - "$MP" "$DROP_MODELS" <<'PY'
+import re, sys
+
+path, drop = sys.argv[1], sys.argv[2].split()
 s = open(path).read()
-i = s.index("value: '%s'" % model)
-start = s.rindex('{', 0, i)
-depth, j = 0, start
-while j < len(s):
-    if s[j] == '{': depth += 1
-    elif s[j] == '}':
-        depth -= 1
-        if depth == 0: break
-    j += 1
-end = j + 1
-while end < len(s) and s[end] in ' ,\n\r\t':
-    end += 1
-open(path, 'w').write(s[:start] + s[end:])
+
+# Keyed by the option's own value, so an option upstream adds keeps whatever
+# description upstream gave it until it is named here.
+DESC = {
+    'default':    'Whatever this deployment recommends -- the latest Opus, usually. $5/$25 per Mtok.',
+    'best':       'Fable 5 where it is served, otherwise the latest Opus. $10/$50 or $5/$25 per Mtok.',
+    'fable':      'Fable 5, 1M context. The most capable model. $10/$50 per Mtok.',
+    'opus':       'Opus 5, 1M context. Best for everyday, complex tasks. $5/$25 per Mtok.',
+    'opus[1m]':   'Opus 5, 1M context pinned -- the same price as Opus. $5/$25 per Mtok.',
+    'opusplan':   'Opus 5 to plan, Sonnet 5 to execute. $5/$25 then $3/$15 per Mtok.',
+    'sonnet':     'Sonnet 5, 1M context. Efficient for routine tasks. $3/$15 per Mtok.',
+    'sonnet[1m]': 'Sonnet 5, 1M context pinned -- the same price as Sonnet. $3/$15 per Mtok.',
+    'haiku':      'Haiku 4.5, 200K context. Fastest for quick answers. $1/$5 per Mtok.',
+}
+FIELD = re.compile(r"description: '[^']*'")
+
+
+def option(text, value):
+    """(start, end) of the option object literal for value, brace-matched."""
+    m = re.search(r"value: '%s'" % re.escape(value), text)
+    if not m:
+        return None
+    start, depth, j = text.rindex('{', 0, m.start()), 0, text.rindex('{', 0, m.start())
+    while j < len(text):
+        if text[j] == '{':
+            depth += 1
+        elif text[j] == '}':
+            depth -= 1
+            if depth == 0:
+                return start, j + 1
+        j += 1
+    return None
+
+
+dropped, priced, skipped = [], [], []
+
+for model in drop:
+    span = option(s, model)
+    if not span:
+        continue
+    start, end = span
+    while end < len(s) and s[end] in ' ,\n\r\t':
+        end += 1
+    s = s[:start] + s[end:]
+    dropped.append(model)
+
+for model, desc in DESC.items():
+    span = option(s, model)
+    if not span:
+        continue
+    start, end = span
+    blk = s[start:end]
+    # The option's own description, never one inside its nested effort object:
+    # everything at this level comes before the first nested brace.
+    cut = blk.find('{', 1)
+    head = blk if cut < 0 else blk[:cut]
+    if not FIELD.search(head):
+        skipped.append(model)
+        continue
+    s = s[:start] + FIELD.sub(lambda _: "description: '%s'" % desc, head, count=1) \
+        + blk[len(head):] + s[end:]
+    priced.append(model)
+
+open(path, 'w').write(s)
+report = []
+if dropped:
+    report.append('dropped ' + ', '.join(dropped))
+if priced:
+    report.append('described %d' % len(priced))
+if skipped:
+    report.append('no description field: ' + ', '.join(skipped))
+print('models: %s' % ('; '.join(report) or 'nothing to do'))
 PY
+  then
     if node --check "$MP" >/dev/null 2>&1; then
-      rm -f "$MP.prepatch"; echo "removed model option: $M"
+      rm -f "$MP.prepatch"
     else
-      mv "$MP.prepatch" "$MP"; echo "WARNING: removing '$M' broke syntax, reverted" >&2
+      mv "$MP.prepatch" "$MP"
+      echo "WARNING: the model-list patch broke syntax, reverted" >&2
     fi
+  else
+    mv "$MP.prepatch" "$MP"
+    echo "WARNING: the model-list patch failed, list left as upstream had it" >&2
   fi
-done
+fi
 
 # --- anchor self-check ------------------------------------------------------
 # Every patch above hangs off something upstream happens to do: a Tailwind
@@ -360,7 +459,7 @@ done
 # ineffective -- the one genuine weakness of patching over forking. Check them
 # by name so a silent failure becomes a loud one. This reports; it never edits.
 # Checked against the pristine bundle, which is the file the anchors describe;
-# patch 3 reports on its own copy, by match count, as it makes it.
+# patches 2 and 3 report on their own edits, by match count, as they make them.
 AJS="${ENTRY:-}"
 ACSS="$(ls "$PKG"/dist/assets/index-*.css 2>/dev/null | head -1 || true)"
 ok=0; miss=0
@@ -380,8 +479,8 @@ if [[ -n $VER ]]; then
   check "accent variable"    "$ACSS" '--primary:'
   check "accent substitution" "$ACSS" 'blue-'
 fi
-# The Recent panel's two anchors are checked whether or not the pill is served:
-# the plugin tab mounts the same file, and that is the usual way in.
+# The Recent panel's two anchors are checked even though nothing here serves it:
+# the plugin tab mounts index.js from the plugin directory, and it needs both.
 check "panel deep links"   "$AJS"  'session/:sessionId'
 check "panel auth token"   "$AJS"  'auth-token'
 if (( miss )); then

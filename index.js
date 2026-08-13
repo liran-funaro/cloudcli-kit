@@ -8,20 +8,12 @@
    moment they stop and are then reachable only by opening each project in
    turn. This is one cross-project, recency-ordered list of them.
 
-   ONE FILE, TWO MOUNTS -- deliberately, so the list can never drift between
-   the two places it appears:
+   This is a CloudCLI plugin and nothing else: the host fetches this file,
+   imports it from a blob: URL, and calls mount(container, api) when the tab is
+   activated, unmount(container) when you navigate away.
+   See https://cloudcli.ai/docs/plugin-overview
 
-     as a plugin    the host fetches this file, imports it from a blob: URL and
-                    calls mount(container, api) when the tab is activated,
-                    unmount(container) when you navigate away.
-                    See https://cloudcli.ai/docs/plugin-overview
-
-     as a page      <script type="module" src="/ide-recent.js">, injected into
-                    dist/index.html by cloudcli-start, which gives a floating
-                    "Recent" pill reachable from anywhere, Alt+R included.
-
-   The blob: test at the bottom is what tells the two apart. Both render the
-   same DOM inside a shadow root, so the app's own styles and this file's can
+   It renders into a shadow root, so the app's own styles and this file's can
    never collide -- while CSS custom properties still inherit *through* the
    boundary, which is why the colours below track the active theme (and any
    ide-theme.css retune) without reading api.context.theme at all.
@@ -43,52 +35,18 @@ const MAX_ROWS = 60; // rows rendered; the filter still sees them all
 
 /* Colours are the app's own tokens, so this follows the theme and any future
    ide-theme.css retune. Upstream defines them for both light and dark, so the
-   fallbacks only matter if a token is ever dropped. Position is a variable
-   too: override --ide-recent-left / -bottom in ide-theme.css if the pill ever
-   lands on top of something.                                              */
+   fallbacks only matter if a token is ever dropped.                        */
 const CSS = `
   :host { display: block; height: 100%; font-family: inherit; }
   [hidden] { display: none !important; }
   button, input { font: inherit; color: inherit; }
 
-  .pill {
-    position: fixed;
-    left: var(--ide-recent-left, 1rem);
-    bottom: calc(var(--ide-recent-bottom, 1rem) + env(safe-area-inset-bottom, 0px));
-    z-index: 2147483000;
-    display: flex; align-items: center; gap: .4rem;
-    padding: .35rem .7rem; border-radius: 999px;
-    border: 1px solid hsl(var(--border, 0 0% 18%));
-    background: hsl(var(--card, 0 0% 16.5%));
-    color: hsl(var(--foreground, 0 0% 100%));
-    font-size: .8125rem; cursor: pointer; opacity: .5;
-    box-shadow: 0 2px 10px rgb(0 0 0 / .35);
-    transition: opacity .15s, border-color .15s;
-  }
-  .pill:hover, .pill:focus-visible {
-    opacity: 1; border-color: hsl(var(--primary, 197 71% 52%));
-  }
-
-  .scrim {
-    position: fixed; inset: 0; z-index: 2147483001;
-    background: rgb(0 0 0 / .55);
-    display: flex; align-items: flex-start; justify-content: center;
-    padding: 6vh 1rem 1rem;
-  }
-
+  /* The host supplies the surface and the heading, so the panel carries no
+     chrome of its own and simply fills what it was handed.                */
   .panel {
     display: flex; flex-direction: column; overflow: hidden;
-    background: hsl(var(--card, 0 0% 16.5%));
+    width: 100%; height: 100%; min-height: 18rem;
     color: hsl(var(--foreground, 0 0% 100%));
-    border: 1px solid hsl(var(--border, 0 0% 18%));
-    border-radius: 12px; box-shadow: 0 24px 64px rgb(0 0 0 / .55);
-    width: min(42rem, 100%); max-height: 84vh;
-  }
-  /* In the tab the host already supplies the surface and the heading, so the
-     panel gives up its chrome and simply fills what it was handed.        */
-  .panel.embedded {
-    width: 100%; height: 100%; max-height: none; min-height: 18rem;
-    background: transparent; border: 0; border-radius: 0; box-shadow: none;
   }
 
   .head { display: flex; gap: .5rem; padding: .7rem; align-items: center; }
@@ -142,7 +100,6 @@ const PANEL_HTML = `
   <div class="head">
     <input class="filter" type="text" placeholder="Filter by conversation or project..." />
     <button class="icon refresh" title="Refresh">&#x27F3;</button>
-    <button class="icon close" title="Close (Esc)">&#x2715;</button>
   </div>
   <div class="list"></div>
   <div class="note"></div>
@@ -194,11 +151,11 @@ const fetchRows = async () => {
   return { rows, running };
 };
 
-/* Builds the list into `root`, an element the caller has already placed inside
-   a shadow root carrying CSS above. The caller owns the surroundings -- a tab
-   panel or a pill and a scrim -- so this stays the same in both.
-   Returns the handful of things the two mounts need to drive it.         */
-function createPanel(root, { embedded = false, current = () => '' } = {}) {
+/* Builds the list into `root`, an element mount() has already placed inside a
+   shadow root carrying the CSS above. `current` returns the session id to mark
+   as "you are here", read lazily because the host's context changes under us.
+   Returns what mount() needs to drive it.                                */
+function createPanel(root, current) {
   root.innerHTML = PANEL_HTML;
   const q = (sel) => root.querySelector(sel);
   const list = q('.list');
@@ -207,8 +164,6 @@ function createPanel(root, { embedded = false, current = () => '' } = {}) {
   let rows = [];
   let running = new Set();
   let currentId = current();
-
-  if (embedded) q('.close').hidden = true;
 
   const render = () => {
     const needle = filter.value.trim().toLowerCase();
@@ -263,21 +218,15 @@ function createPanel(root, { embedded = false, current = () => '' } = {}) {
 
   return {
     refresh,
-    render,
-    focus: () => filter.focus(),
-    clearFilter: () => {
-      filter.value = '';
-    },
     setCurrent: (id) => {
       if (id === currentId) return;
       currentId = id;
       render();
     },
-    onClose: (fn) => q('.close').addEventListener('click', fn),
   };
 }
 
-/* --- mount 1: the plugin tab ---------------------------------------------- */
+/* --- the plugin tab ------------------------------------------------------- */
 
 /* The host hands the same container to mount and unmount. It re-imports this
    file on every activation (a fresh blob: URL each time, so nothing is cached
@@ -290,12 +239,10 @@ export async function mount(container, host) {
   const holder = document.createElement('div');
   container.appendChild(holder);
   const sr = holder.attachShadow({ mode: 'open' });
-  sr.innerHTML = `<style>${CSS}</style><div class="panel embedded"></div>`;
+  sr.innerHTML = `<style>${CSS}</style><div class="panel"></div>`;
 
-  const panel = createPanel(sr.querySelector('.panel'), {
-    embedded: true,
-    current: () => host?.context?.session?.id ?? '',
-  });
+  const panel = createPanel(sr.querySelector('.panel'),
+    () => host?.context?.session?.id ?? '');
 
   /* Project and session travel with the host's context, so following it keeps
      the "you are here" marker honest as you move around the app.          */
@@ -316,63 +263,3 @@ export function unmount(container) {
   }
   held.holder.remove();
 }
-
-/* --- mount 2: the floating pill ------------------------------------------- */
-
-function installOverlay() {
-  const holder = document.createElement('div');
-  document.body.appendChild(holder);
-  const sr = holder.attachShadow({ mode: 'open' });
-  sr.innerHTML = `
-    <style>${CSS}</style>
-    <button class="pill" title="Recent conversations (Alt+R)">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/>
-        <path d="M12 7v5l3 2"/></svg>Recent</button>
-    <div class="scrim" hidden><div class="panel" role="dialog" aria-label="Recent conversations"></div></div>`;
-
-  const pill = sr.querySelector('.pill');
-  const scrim = sr.querySelector('.scrim');
-  const here = () => decodeURIComponent(location.pathname).replace(/^\/session\//, '');
-  const panel = createPanel(sr.querySelector('.panel'), { current: here });
-
-  const open = () => {
-    scrim.hidden = false;
-    panel.setCurrent(here());
-    panel.clearFilter();
-    panel.focus();
-    panel.refresh();
-  };
-  const close = () => {
-    scrim.hidden = true;
-  };
-
-  pill.addEventListener('click', open);
-  panel.onClose(close);
-  scrim.addEventListener('click', (e) => {
-    if (e.target === scrim) close();
-  });
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !scrim.hidden) {
-      close();
-      return;
-    }
-    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'r' || e.key === 'R')) {
-      e.preventDefault();
-      scrim.hidden ? open() : close();
-    }
-  });
-
-  /* Keep the pill off the login screen. A localStorage read costs nothing, and
-     there is no event for "the app just stored a token".                   */
-  const syncPill = () => {
-    pill.hidden = !token();
-  };
-  syncPill();
-  setInterval(syncPill, 5000);
-}
-
-/* The plugin host imports this file from a blob: URL, so a blob: meta URL
-   means "the tab is mounting me, wait to be called". Anything else means the
-   browser loaded it as a page script and the pill is what was wanted.     */
-if (!import.meta.url.startsWith('blob:')) installOverlay();

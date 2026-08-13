@@ -9,10 +9,8 @@
 # plugin (a plugin's module is imported only when its tab is activated):
 #
 #   ~/.config/cloudcli/ide-theme.css   appearance -- yours to retune, seeded once
-#   ~/.config/cloudcli/ide-recent.js   the floating "Recent" pill (same file as
-#                                      the plugin entry), refreshed every run
-#   ~/bin/cloudcli-start               applies both to the package on every
-#                                      start, so an upgrade cannot revert them
+#   ~/bin/cloudcli-start               applies it to the package on every start,
+#                                      so an upgrade cannot revert it
 #
 #   --force        overwrite ide-theme.css with the repo's copy (backs up first)
 #   --plugin       also install/update the plugin into ~/.claude-code-ui/plugins
@@ -69,14 +67,16 @@ else
   echo "  installed $CONF/ide-theme.css"
 fi
 
-# --- pill: code, so always take the repo's copy ------------------------------
-echo "recent-conversations pill:"
-if cmp -s "$REPO/index.js" "$CONF/ide-recent.js"; then
-  echo "  $CONF/ide-recent.js already current"
-else
-  stamp "$CONF/ide-recent.js"
-  cp -f "$REPO/index.js" "$CONF/ide-recent.js"
-  echo "  installed $CONF/ide-recent.js (same file the plugin serves as its tab)"
+# --- un-seed the pill --------------------------------------------------------
+# The Recent list used to be servable as a page script as well as a plugin tab,
+# from a second copy of index.js here. The tab is the only way in now, and it is
+# mounted from the plugin directory, so this copy has no consumer. Keep a dated
+# copy only if it is something other than index.js -- nothing is lost otherwise.
+if [[ -f $CONF/ide-recent.js ]]; then
+  echo "recent-conversations pill (removed):"
+  cmp -s "$REPO/index.js" "$CONF/ide-recent.js" || stamp "$CONF/ide-recent.js"
+  rm -f "$CONF/ide-recent.js"
+  echo "  un-seeded $CONF/ide-recent.js -- the plugin tab replaces it"
 fi
 
 # --- launcher ----------------------------------------------------------------
