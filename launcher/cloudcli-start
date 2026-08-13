@@ -31,6 +31,23 @@ if [[ ! -d $PKG ]]; then
 fi
 [[ -d $PKG ]] || { echo "install failed: $PKG missing" >&2; exit 1; }
 
+# Three of the server's dependencies are native, and only an install script
+# gives them a loadable binary. npm 11 records which dependencies may run one
+# and warns about the rest -- advisory for now, but its own docs say a future
+# release will block the unreviewed ones, which would leave an install that
+# imports fine right up to its first query. Check here, where the failure can
+# still be explained, rather than leaving Restart=on-failure to discover it.
+for m in better-sqlite3 bcrypt node-pty; do
+  (cd "$PKG" && node -e "require('$m')") >/dev/null 2>&1 && continue
+  {
+    echo "$m has no loadable binary -- its install script did not run."
+    echo "Approve the scripts and rebuild, then start again:"
+    echo "  npm approve-scripts --allow-scripts-pending    # see what is pending"
+    echo "  npm rebuild -g --prefix $PREFIX $m"
+  } >&2
+  exit 1
+done
+
 # The copies land at the dist ROOT, deliberately not appended to the hashed
 # assets in dist/assets/: the service worker (dist/sw.js) is cache-first for
 # /assets/ and network-first for everything else, so a file here is never

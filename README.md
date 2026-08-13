@@ -134,6 +134,11 @@ never edits.
   cache-first for `/assets/` and network-first elsewhere, so a file there could be served
   stale. The server also sends `Cache-Control: immutable` for every static file, which is
   why both tags carry an md5 version query.
+- The launcher checks that the server's three native dependencies (`better-sqlite3`,
+  `bcrypt`, `node-pty`) actually load before starting. npm 11 warns about dependencies
+  whose install scripts it hasn't recorded as approved, and says a future release will block
+  them — which would produce an install that imports fine and then fails on its first query.
+  If the check trips it prints the `npm rebuild` line to fix it and starts nothing.
 - `CLOUDCLI_DROP_MODELS` (default `fable`) lists model options to remove from the picker —
   useful when a deployment's gateway cannot serve them. The edit is brace-matched, verified
   with `node --check`, and reverted automatically if it would break syntax.
