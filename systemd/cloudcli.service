@@ -1,0 +1,22 @@
+[Unit]
+Description=CloudCLI - Claude Code web UI (loopback only)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=HOST=127.0.0.1
+Environment=PORT=3001
+# Mid-turn steering (patch 5) is on by whatever the launcher defaults to, which
+# since 2026-08-13 is on. To reverse it, add the line below and restart -- the
+# launcher un-applies all eight of its server edits when the flag is 0. An
+# Environment=CLOUDCLI_STEER=1 line used to live here and became a line that
+# said nothing, which is why the knob is now named only where it does something.
+# Environment=CLOUDCLI_STEER=0
+# Login shell so PATH/node and the Claude gateway env from ~/.bashrc apply.
+ExecStart=/bin/bash -lc '%h/bin/cloudcli-start'
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=default.target

@@ -319,6 +319,14 @@ never edits.
 - Delete `~/.config/cloudcli/ide-theme.css` and the next launcher run cleanly un-links it. An
   earlier version of the launcher could also serve the Recent list as a floating pill; that is
   gone, and both scripts un-link what it left behind on a machine that ran it.
+- [`systemd/cloudcli.service`](systemd/cloudcli.service) is the user unit this is deployed
+  under, kept here as a copy rather than installed by `install.sh` — putting a unit in place
+  is enabling and starting a service, which is a decision, not a file operation. Copy it to
+  `~/.config/systemd/user/`, then `systemctl --user daemon-reload && systemctl --user enable
+  --now cloudcli`. It binds loopback, starts through a login shell so `PATH`/node and the
+  gateway environment apply, and names `CLOUDCLI_STEER=0` in a comment as the way to reverse
+  steering. Nothing reconciles it: a divergence between that copy and the running unit is
+  yours to notice, which is the price of the kit not touching your services.
 
 ## Licence
 
