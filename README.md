@@ -5,8 +5,9 @@ stylesheet and a launcher that re-applies it, and everything below, on every sta
 package upgrade cannot silently revert them.
 
 Surfaces, accent, typography, inline code, full-width chat. Conversations as the sidebar's
-default, with a dot on the ones that are working and the Projects list's session menu on
-every row. Each model described, priced, and pruned in the model menu. Enter for a newline,
+default, its rows drawn the way the Projects list draws a session — the activity dot, the
+spinner, the session menu — plus the project each one belongs to. Each model described,
+priced, and pruned in the model menu. Enter for a newline,
 ⌘/Ctrl+Enter to send. A Stop that always stops, and a message typed mid-turn steering the
 turn it lands in. One command: `./install.sh`.
 
@@ -31,16 +32,15 @@ everything here:
   eye. That is a filesystem job, not a browser job.
 - **The model options live in the server's own module.** Dropping one, or giving one a
   description worth reading, is an edit to a file on disk. No plugin surface reaches it.
-- **Six of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
+- **Five of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
   switch is React state; the model menu never passes the description to the menu component
-  that would render it; the Conversations list is never handed the running-session state its
-  sibling lists draw a dot from, nor the handlers behind the session menu its sibling rows
-  end in, nor a refetch when one of those handlers changes something; and the Enter key sends
-  by default. None of the first five is reachable from CSS, and a plugin runs too late and in
-  the wrong scope to change any of them — the very rows it would have to reach are rendered
-  and gone before its module is fetched. The sixth *is* stored in the browser, but a plugin
-  could only overwrite the value you chose — the bundle edit changes the default and leaves
-  your choice alone.
+  that would render it; a Conversations row is drawn without the activity, the spinner or the
+  menu its sibling rows have, and nothing refetches that list when one of those actions
+  changes something; and the Enter key sends by default. None of the first four is reachable
+  from CSS, and a plugin runs too late and in the wrong scope to change any of them — the very
+  rows it would have to reach are rendered and gone before its module is fetched. The fifth
+  *is* stored in the browser, but a plugin could only overwrite the value you chose — the
+  bundle edit changes the default and leaves your choice alone.
 
 So it is one stylesheet plus a launcher. The upside of doing it this way rather than forking
 CloudCLI: nothing here lives in a file upstream also edits, so there is never a merge —
@@ -85,9 +85,9 @@ The launcher un-seeds what its earlier floating-pill version left behind, and `i
 reports a still-installed plugin directory rather than deleting it: that is a clone with a
 switch beside it in Settings → Plugins, and removing either is yours to do.
 
-## Six small edits in the bundle
+## Five small edits in the bundle
 
-Four are things the app already almost does; one is a default worth flipping; one is a
+Three are things the app already almost does; one is a default worth flipping; one is a
 list keeping itself current:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
@@ -95,27 +95,29 @@ list keeping itself current:
 - **The model's description in the model menu.** Every option already carries one, and the
   menu-item component already renders one when given it — the effort menu right next door
   passes exactly that prop. The model menu just never did.
-- **A working dot on the Conversations list.** The Projects and Running lists both draw one;
-  the Conversations list, alone among the three, was never handed the state to draw it from —
-  even though its own call site already reads two other fields off the very object that holds
-  it. So the patch passes them along and reuses the app's own indicator: green for working,
-  amber for a session waiting on an answer.
-- **The session menu on a Conversations row.** Both lists show the same sessions, and the
-  Projects one ends each row in a three-dot menu — rename, copy the provider session id,
-  archive or delete — while the Conversations one ended in a chevron that says nothing the
-  row does not, since the row is already a link. So the menu moves into the chevron's slot:
-  the app's own `ActionMenu`, its own icons, its own handlers. Nothing had to be
-  reimplemented, because rename and delete key on the session id alone — their `projectId`
-  and `provider` arguments are compatibility parameters upstream marks unused — so a row
-  that holds no Project and no session object, only a conversation summary, can still drive
-  both, and rename reuses the editing state the sidebar already keeps. The one thing not
-  carried over is the copy item's *loading* / *copied* labels, which are component state
-  this row has none of; it copies, and says only that it copies.
+- **A Conversations row, drawn the way a Projects session row is drawn.** The two lists show
+  the same sessions, and the Projects one said far more about one: a dot at the left edge,
+  amber when it needs an answer and green when it was touched in the last ten minutes; a
+  spinner while it works, or how long ago it was touched; and a three-dot menu that renames,
+  copies the provider session id, archives or deletes. A Conversations row had none of it —
+  just a chevron that says nothing the row does not, the row being a link. So the whole row
+  is replaced by that one, built from the app's own pieces: its button variants, its
+  `Tooltip`, its spinner, its provider mark, its `ActionMenu` and icons, and the editing
+  state it already keys by session id. Added to it is the one line a row under a project does
+  not need — which project it belongs to — where a session row shows its message count.
+  Nothing had to be reimplemented: rename and delete key on the session id alone (their
+  `projectId` and `provider` arguments are compatibility parameters upstream marks unused),
+  so a row holding only a conversation summary drives both. The one thing not carried over is
+  the copy item's *loading* / *copied* labels, which are component state this row has none
+  of; it copies, and says only that it copies. Upstream is carrying
+  [the same change](https://github.com/siteboon/claudecodeui/pull/1157) as a shared component.
 - **A rename or a delete refreshing the list it was made from.** Upstream refetches the
   archived sessions when one is deleted and the projects when one is renamed. The
   Conversations list, which until now had neither action, was refetched by neither — it
   would keep showing the old title, or a row whose session is gone. Both paths get one more
-  call: the same page-zero fetch the sidebar's own refresh button makes.
+  call: the same page-zero fetch the sidebar's own refresh button makes. (The PR upstream
+  patches the loaded rows in place instead, which also keeps the pages a reader has loaded
+  past the first; reaching those state setters through the minifier is not worth it here.)
 - **Enter for a newline, ⌘/Ctrl+Enter to send.** This one the app does have a setting for —
   Quick Settings (the tab on the right edge of the window) → Input Settings → *Send by
   Ctrl+Enter* — it just defaults off, so every browser starts out sending on Enter. The patch
@@ -142,20 +144,24 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 7/7 applied -- sidebar default, model description, conversation status, ctrl+enter
-to send, send while running, conversation menu, conversation refresh
+frontend: 6/6 applied -- sidebar default, model description, ctrl+enter to send,
+send while running, conversation row, conversation refresh
 ```
 
-Seven because one of them, *send while running*, belongs to steering — described with it
-below. `CLOUDCLI_STEER=0` leaves it out and the run prints `6/6`.
+Six because one of them, *send while running*, belongs to steering — described with it
+below. `CLOUDCLI_STEER=0` leaves it out and the run prints `5/5`.
 
-The six above are read from more than one anchor each: the menu alone needs the
-`ActionMenu` component, three icons, the api object and the clipboard helper, none of which
-has a name of its own after minification. Not one is guessed. Each is read from a site that
-says which is which — the Projects menu names its own component and icons, the copy-state
-ternary names the clipboard icon, the api object comes from its own call — and a name that
-already appears inside the function being patched is treated as a possible local that would
-shadow it, which skips the patch rather than risking it.
+Several are read from more than one anchor: the conversation row alone borrows twelve names
+the minifier chose — the classname helper and button variants that give a session row its
+card, the `Tooltip`, the spinner, the provider mark, the `ActionMenu` and four icons, the api
+object, the clipboard helper, and the row's own locals. Not one is guessed. Each comes from a
+site that says which is which: the Projects row names its own card, spinner and menu, the
+copy-state ternary names the clipboard icon, the api object comes from its own call, and the
+row's locals from the line that declares them. A name that appears more than once is accepted
+only when every occurrence agrees on it — the mobile and desktop halves of a row name the
+same spinner — and a name **bound** inside the function being patched would shadow what the
+new row means by it, so that is checked too, and nothing is applied if it is. A name merely
+*used* there is no obstacle: the row already calls two of the twelve.
 
 ## The model menu
 

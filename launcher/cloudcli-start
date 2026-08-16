@@ -233,48 +233,7 @@ if len(ITEM.findall(s)) == 1:
 else:
     missing.append('model description (%d matches)' % len(ITEM.findall(s)))
 
-# (3) The Conversations list gives no sign of which sessions are working, while
-# the Projects and Running lists both draw a dot for it. The app has the state
-# -- a Map of processing sessions and a Set of ones awaiting an answer -- and
-# the list's call site already reads two other fields off the very props object
-# that holds them. So: pass them, receive them, draw the app's own indicator.
-# Three anchors that only mean anything together, so they apply together.
-PS, AT = '_kitProcessing', '_kitAttention'       # names the minifier won't emit
-ATT = '%s?.has(\\3.sessionId)' % AT
-DOT = ('%s?.has(\\3.sessionId)||%s?s.jsx("span",{role:"status",'
-       'title:%s?"Session needs attention":"Working",'
-       '"aria-label":%s?"Session needs attention":"Working",'
-       'className:"h-2 w-2 flex-shrink-0 animate-pulse rounded-full "+'
-       '(%s?"bg-amber-500":"bg-green-500")}):null,' % (PS, ATT, ATT, ATT, ATT))
-CONV = [
-    # hand the state to the list, off the props object it already reads from
-    (re.compile(r'currentTime:(\w+)\.currentTime,onConversationSelect:'),
-     r'currentTime:\1.currentTime,activeSessions:\1.activeSessions,'
-     r'attentionSessionIds:\1.attentionSessionIds,onConversationSelect:'),
-    # receive it there
-    (re.compile(r'hasError:(\w+),selectedSession:(\w+),currentTime:(\w+),'
-                r'onConversationSelect:'),
-     r'hasError:\1,selectedSession:\2,currentTime:\3,'
-     'activeSessions:%s,attentionSessionIds:%s,onConversationSelect:' % (PS, AT)),
-    # and draw the dot at the end of each row, ahead of its chevron
-    (re.compile(r'(s\.jsx\((\w+),\{className:"h-3\.5 w-3\.5 flex-shrink-0 '
-                r'text-muted-foreground/40 transition-transform '
-                r'group-hover:translate-x-0\.5 '
-                r'group-hover:text-muted-foreground"\}\)\]\},(\w+)\.sessionId\))'),
-     DOT + r'\1'),
-]
-counts = [len(p.findall(s)) for p, _ in CONV]
-taken = [n for n in (PS, AT) if re.search(r'\b%s\b' % n, s)]
-if counts == [1, 1, 1] and not taken:
-    for pat, rep in CONV:
-        s = pat.sub(rep, s, count=1)
-    applied.append('conversation status')
-else:
-    missing.append('conversation status (%s matches%s)'
-                   % ('/'.join(str(c) for c in counts),
-                      ', name %s taken' % ','.join(taken) if taken else ''))
-
-# (4) Enter for a newline, Cmd/Ctrl+Enter to send. Unlike the three above this
+# (3) Enter for a newline, Cmd/Ctrl+Enter to send. Unlike the two above this
 # one HAS a setting -- Quick Settings (the tab on the right edge) > Input
 # Settings > "Send by Ctrl+Enter" -- it just defaults off. This flips that one
 # default and nothing else, which bounds what it can do: the preferences hook
@@ -313,41 +272,47 @@ if steer:
     else:
         missing.append('send while running (%d matches)' % len(BUSY.findall(s)))
 
-# (6) The Conversations list ends every row in a chevron that says nothing the
-# row does not -- it is already a link -- while the Projects list ends its
-# session rows in a three-dot menu that renames, copies the provider session id
-# and archives or deletes. Same sessions either way, so the same menu belongs
-# here, in the slot the chevron had: already the right size, already the right
-# place, no row to relayout.
+# (5) A Conversations row, drawn the way a Projects session row is drawn. The
+# two lists show the same sessions, and the Projects one says far more about
+# one: a dot at the left edge, amber when it needs an answer and green when it
+# was touched in the last ten minutes; a spinner while it works, or how long
+# ago it was touched; and a three-dot menu that renames, copies the provider
+# session id and archives or deletes. The Conversations row had none of it --
+# just a chevron that says nothing the row does not, the row being a link.
 #
-# It is the app's own ActionMenu, with the app's own icons and the app's own
-# handlers. Everything the Projects row hands that component sits on the props
-# object this call site already reads selectedSession and currentTime off, so
-# one more prop carries the lot. Rename and delete key on the session id alone
-# -- their projectId and provider arguments are compatibility parameters
-# upstream marks unused -- so a row that holds neither a Project nor a session
-# object, only a conversation summary, can still drive both.
+# So the whole row is replaced with that one, built from the app's own pieces:
+# its button variants, its Tooltip, its spinner, its provider mark, its
+# ActionMenu and icons. The one thing added is the line a row under a project
+# does not need -- which project it belongs to -- where a session row shows its
+# message count. Nothing is invented; the state was already on the props object
+# this call site reads selectedSession and currentTime off, so one more prop
+# carries the lot, and rename and delete key on the session id alone (their
+# projectId and provider arguments are compatibility parameters upstream marks
+# unused), so a row holding only a conversation summary can drive both.
 #
-# Six of the names below are the minifier's, and not one is guessed: each is
-# read from a site that names itself, the Projects menu for the component and
-# its icons, the copy-state ternary for the clipboard icon, the api object from
-# its own call, the clipboard helper from its writeText branch. A name already
-# present in the target function could be a local that shadows it, so that is
-# checked too, and nothing is applied if it is.
+# Twelve of the names below are the minifier's, and not one is guessed: each is
+# read from a site that names itself -- the Projects row for its button
+# variants, Tooltip, spinner and menu, the copy-state ternary for the clipboard
+# icon, the api object from its own call, the clipboard helper from its
+# writeText branch, and the row's own locals from the line that declares them.
+# A name already present in the target function could be a local that shadows
+# it, so that is checked too, and nothing is applied if it is.
 
 
 def kit_names(pattern):
     """Names the minifier chose, from a site that says which is which.
 
-    Returns the groups of the one match, or None unless there is exactly one:
-    a second match means the shape no longer identifies what it used to.
+    Returns the groups, or None unless every match agrees on them. One match is
+    the usual case; a shape that appears twice -- the mobile and desktop halves
+    of a row, say -- still identifies the same thing as long as both name it the
+    same. Disagreement means the shape no longer identifies what it used to.
     """
-    found = list(re.finditer(pattern, s))
-    return found[0].groups() if len(found) == 1 else None
+    found = {m.groups() for m in re.finditer(pattern, s)}
+    return found.pop() if len(found) == 1 else None
 
 
-ROW = kit_names(r's\.jsx\((\w+),\{label:"Session options",ariaLabel:`Session '
-                r'options for \$\{\w+\.sessionName\}`,icon:(\w+),iconOnly:!0')
+MENU = kit_names(r's\.jsx\((\w+),\{label:"Session options",ariaLabel:`Session '
+                 r'options for \$\{\w+\.sessionName\}`,icon:(\w+),iconOnly:!0')
 EDIT = kit_names(r'\{key:"rename",label:"Rename session",icon:(\w+),onSelect:')
 TRASH = kit_names(r'\{key:"delete",label:"Archive or delete session",'
                   r'icon:(\w+),isDanger:!0')
@@ -355,73 +320,197 @@ COPY = kit_names(r'\w+==="copied"\?\w+:(\w+),')
 APIO = kit_names(r'(\w+)\.providerSessionId\(')
 CLIP = kit_names(r'async function (\w+)\(\w+\)\{if\(!\w+\)return!1;let \w+=!1;'
                  r'try\{typeof navigator<"u"&&navigator\.clipboard\?\.writeText')
+SAVE = kit_names(r's\.jsx\((\w+),\{className:"h-3 w-3 text-green-600 '
+                 r'dark:text-green-400"\}\)')
+DROP = kit_names(r's\.jsx\((\w+),\{className:"h-3 w-3 text-gray-600 '
+                 r'dark:text-gray-400"\}\)')
+# The Projects row names four more just by being itself: the classname helper
+# and button variants that give it its card, its spinner, and its Tooltip.
+CARD = kit_names(r'className:(\w+)\((\w+)\(\{variant:"ghost"\}\),"h-auto w-full '
+                 r'justify-start rounded-md border bg-card p-2 pr-11 text-left '
+                 r'font-normal transition-all duration-150"')
+SPIN = kit_names(r'className:"flex h-5 w-5 items-center justify-center rounded-md '
+                 r'text-muted-foreground",children:s\.jsx\((\w+),'
+                 r'\{className:"h-3 w-3 animate-spin"\}\)')
+TIP = kit_names(r's\.jsx\((\w+),\{content:\w+\?\w+\("tooltips\.'
+                r'attentionRequiredIndicator"')
+# And the row names its own: the mark it draws, the locals it derives, the
+# translator it was handed.
+LOGO = kit_names(r's\.jsx\((\w+),\{provider:\w+\.provider,className:"h-3\.5 w-3\.5"\}\)')
+LOCAL = kit_names(r'const (\w+)=String\((\w+)\?\.id\?\?""\)===(\w+)\.sessionId,'
+                  r'(\w+)=(\w+)\(\3\.lastActivity,(\w+)\),(\w+)=')
+XLATE = kit_names(r'onLoadMore:(\w+),onRetry:(\w+),t:(\w+)\}\)\{return')
 
-# The list's props, its own signature, and the chevron that ends each row.
-# Written to survive patch 3 having already run over the same three sites: each
-# anchor is a prefix of what that patch leaves behind.
+# The list's props, its own signature, and the row itself -- from the return
+# that opens it to the chevron and key that close it.
 CALL = re.compile(r'selectedSession:(\w+)\.selectedSession,currentTime:\1\.currentTime,')
 SIG = re.compile(r'hasError:(\w+),selectedSession:(\w+),currentTime:(\w+),')
-CHEV = re.compile(r's\.jsx\(\w+,\{className:"h-3\.5 w-3\.5 flex-shrink-0 '
-                  r'text-muted-foreground/40 transition-transform '
-                  r'group-hover:translate-x-0\.5 group-hover:text-muted-foreground"\}\)'
-                  r'(\]\},(\w+)\.sessionId\))')
-MENU = (
-    's.jsx("span",{className:"flex flex-shrink-0 items-center",'
-    'onClick:_e=>{_e.preventDefault(),_e.stopPropagation()},children:'
-    # The row is a link and the menu lives inside it, so every click that
-    # belongs to the menu is stopped here rather than navigating.
-    '_kitRow?.editingSession===\\2.sessionId?'
-    # Renaming is the app's own editing state, keyed by session id, so the
-    # input needs no state of its own -- and the Projects list, wherever it is
-    # scrolled to, shows the same rename for the same session.
-    's.jsx("input",{type:"text","aria-label":"Session name",autoFocus:!0,'
-    'value:_kitRow.editingSessionName,'
-    'onChange:_e=>_kitRow.onEditingSessionNameChange(_e.target.value),'
-    'onBlur:()=>_kitRow.onCancelEditingSession(),'
-    'onKeyDown:_e=>{_e.stopPropagation(),_e.key==="Enter"?'
-    '_kitRow.onSaveEditingSession(\\2.projectId,\\2.sessionId,'
-    '_kitRow.editingSessionName,\\2.provider):'
-    '_e.key==="Escape"&&_kitRow.onCancelEditingSession()},'
-    'className:"w-28 rounded border border-border bg-background px-2 py-1 '
-    'text-xs focus:outline-none focus:ring-1 focus:ring-primary"}):'
-    's.jsx(%(menu)s,{label:"Session options",'
-    'ariaLabel:`Session options for ${\\2.sessionTitle}`,icon:%(dots)s,'
-    'iconOnly:!0,portal:!0,variant:"ghost",size:"icon",'
-    'triggerClassName:"h-7 w-7 text-muted-foreground opacity-70 hover:bg-muted '
-    'hover:opacity-100",menuClassName:"w-[260px] rounded-xl p-1.5 shadow-xl",'
-    'items:[{key:"rename",label:"Rename session",icon:%(edit)s,'
-    'onSelect:()=>_kitRow.onStartEditingSession(\\2.sessionId,\\2.sessionTitle)},'
-    # The one item without the Projects menu's loading and copied labels:
-    # those are component state, and this row has none to spare.
-    '{key:"copy",label:"Copy session ID",icon:%(copy)s,'
-    'onSelect:()=>%(api)s.providerSessionId(\\2.sessionId).then(_r=>_r.json())'
-    '.then(_j=>%(clip)s(_j?.data?.sessionId||"")).catch(()=>{})},'
-    '{key:"delete",label:"Archive or delete session",icon:%(trash)s,isDanger:!0,'
-    'showDividerBefore:!0,onSelect:()=>_kitRow.onDeleteSession(\\2.projectId,'
-    '\\2.sessionId,\\2.sessionTitle,\\2.provider)}]})})\\1'
-)
-sig = SIG.search(s)
+ROW = re.compile(r'return s\.jsxs\("a",\{href:`/session/\$\{(\w+)\.sessionId\}`,'
+                 r'onClick:(\w+),"data-testid":"recent-conversation-row"'
+                 r'[\s\S]*?s\.jsx\(\w+,\{className:"h-3\.5 w-3\.5 flex-shrink-0 '
+                 r'text-muted-foreground/40 transition-transform '
+                 r'group-hover:translate-x-0\.5 group-hover:text-muted-foreground"\}\)'
+                 r'\]\},\1\.sessionId\)')
+
+
+def kit_row(names):
+    """The replacement row, in the app's own vocabulary.
+
+    Everything it reads is either a name the app chose for itself or one of the
+    row's own locals; the only names it introduces are _kit-prefixed, which the
+    minifier does not emit and which the caller has checked are free.
+    """
+    return ('const _kitBusy=_kitRow?.activeSessions?.has(%(conv)s.sessionId),'
+            '_kitAsk=!!_kitRow?.attentionSessionIds?.has(%(conv)s.sessionId)'
+            '&&!%(sel)s,'
+            '_kitEdit=_kitRow?.editingSession===%(conv)s.sessionId,'
+            # The app's own rule for "recently active": within ten minutes of
+            # the clock it already ticks once a minute for exactly this.
+            '_kitNew=!!%(conv)s.lastActivity&&%(now)s.getTime()-'
+            'new Date(%(conv)s.lastActivity).getTime()<6e5,'
+            '_kitDot=_kitAsk||!_kitBusy&&_kitNew,'
+            '_kitSays=_kitAsk?%(t)s("tooltips.attentionRequiredIndicator",'
+            '{defaultValue:"Session needs attention"}):'
+            '%(t)s("tooltips.activeSessionIndicator");'
+            'return s.jsxs("div",{className:"group relative",children:['
+            # the dot, at the left edge, outside the card
+            '_kitDot&&s.jsx("div",{className:"absolute left-0 top-1/2 '
+            '-translate-x-1 -translate-y-1/2 transform",children:'
+            's.jsx(%(tip)s,{content:_kitSays,position:"right",children:'
+            's.jsx("div",{role:"status","aria-label":_kitSays,'
+            'className:"h-2 w-2 animate-pulse rounded-full "+'
+            '(_kitAsk?"bg-amber-500":"bg-green-500")})})}),'
+            # the card
+            's.jsx("a",{href:`/session/${%(conv)s.sessionId}`,onClick:%(click)s,'
+            '"data-testid":"recent-conversation-row",'
+            'className:%(cn)s(%(btn)s({variant:"ghost"}),"h-auto w-full '
+            'justify-start rounded-md border bg-card p-2 pr-11 text-left '
+            'font-normal transition-all duration-150",'
+            '%(sel)s?"border-primary/20 bg-primary/5":"border-border/30",'
+            '!%(sel)s&&_kitBusy?"border-border/60 bg-muted/20 hover:bg-muted/25"'
+            ':!%(sel)s&&_kitNew?"border-green-500/30 bg-green-50/5 '
+            'hover:bg-green-50/10 dark:bg-green-900/5 dark:hover:bg-green-900/10"'
+            ':"hover:bg-accent/50"),children:'
+            's.jsxs("div",{className:"flex w-full min-w-0 items-center gap-2",'
+            'children:[s.jsx("div",{className:%(cn)s("flex h-5 w-5 flex-shrink-0 '
+            'items-center justify-center rounded-md",'
+            '%(sel)s?"bg-primary/10":"bg-muted/50"),children:'
+            's.jsx(%(logo)s,{provider:%(conv)s.provider,className:"h-3 w-3"})}),'
+            's.jsxs("div",{className:"min-w-0 flex-1",children:['
+            's.jsxs("div",{className:"flex items-center gap-2",children:['
+            's.jsx("div",{className:"min-w-0 flex-1 truncate text-sm font-normal '
+            'text-foreground",title:%(conv)s.sessionTitle,'
+            'children:%(conv)s.sessionTitle}),'
+            # working, or when it last was
+            '_kitBusy?s.jsx("span",{className:"ml-auto flex-shrink-0 '
+            'transition-opacity duration-200 "+(_kitEdit?"opacity-0":'
+            '"group-hover:opacity-0"),children:s.jsx(%(tip)s,{content:'
+            '%(t)s("tooltips.processingSessionIndicator","Processing session"),'
+            'position:"top",children:s.jsx("span",{className:"flex h-5 w-5 '
+            'items-center justify-center rounded-md text-muted-foreground",'
+            'children:s.jsx(%(spin)s,{className:"h-3 w-3 animate-spin"})})})}):'
+            '%(age)s&&s.jsx("span",{className:"ml-auto flex-shrink-0 '
+            'text-[11px] text-muted-foreground transition-opacity duration-200 "+'
+            '(_kitEdit?"opacity-0":"group-hover:opacity-0"),children:%(age)s})]}),'
+            # the line a session row under a project does not need
+            's.jsx("div",{className:"mt-0.5 flex min-w-0 items-center",children:'
+            's.jsx("span",{className:"truncate text-[10px] leading-3 '
+            'text-muted-foreground",children:%(conv)s.projectDisplayName})})]})]})}),'
+            # and the controls, over the right edge, where the Projects row has them
+            's.jsx("div",{className:"absolute right-2 top-1/2 flex '
+            '-translate-y-1/2 transform items-center gap-1",children:_kitEdit?'
+            's.jsxs(s.Fragment,{children:['
+            's.jsx("input",{type:"text","aria-label":"Session name",autoFocus:!0,'
+            'value:_kitRow.editingSessionName,'
+            'onChange:_e=>_kitRow.onEditingSessionNameChange(_e.target.value),'
+            # Leaving the controls cancels, as clicking outside them does in the
+            # Projects list; save and cancel keep the focus (see onMouseDown).
+            'onBlur:_e=>{_e.currentTarget.parentElement?.contains(_e.relatedTarget)'
+            '||_kitRow.onCancelEditingSession()},'
+            'onKeyDown:_e=>{_e.stopPropagation(),_e.key==="Enter"?'
+            # An IME sends Enter to accept a candidate, not to save.
+            '_e.nativeEvent.isComposing||_kitRow.onSaveEditingSession('
+            '%(conv)s.projectId,%(conv)s.sessionId,_kitRow.editingSessionName,'
+            '%(conv)s.provider):_e.key==="Escape"&&'
+            '_kitRow.onCancelEditingSession()},'
+            'className:"w-32 rounded border border-border bg-background px-2 '
+            'py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"}),'
+            's.jsx("button",{type:"button",title:%(t)s("tooltips.save"),'
+            'onMouseDown:_e=>_e.preventDefault(),'
+            'onClick:()=>_kitRow.onSaveEditingSession(%(conv)s.projectId,'
+            '%(conv)s.sessionId,_kitRow.editingSessionName,%(conv)s.provider),'
+            'className:"flex h-6 w-6 items-center justify-center rounded '
+            'bg-green-50 hover:bg-green-100 dark:bg-green-900/20 '
+            'dark:hover:bg-green-900/40",children:'
+            's.jsx(%(check)s,{className:"h-3 w-3 text-green-600 '
+            'dark:text-green-400"})}),'
+            's.jsx("button",{type:"button",title:%(t)s("tooltips.cancel"),'
+            'onMouseDown:_e=>_e.preventDefault(),'
+            'onClick:()=>_kitRow.onCancelEditingSession(),'
+            'className:"flex h-6 w-6 items-center justify-center rounded '
+            'bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 '
+            'dark:hover:bg-gray-900/40",children:'
+            's.jsx(%(cross)s,{className:"h-3 w-3 text-gray-600 '
+            'dark:text-gray-400"})})]}):'
+            's.jsx(%(menu)s,{label:"Session options",'
+            'ariaLabel:`Session options for ${%(conv)s.sessionTitle}`,'
+            'icon:%(dots)s,iconOnly:!0,portal:!0,variant:"ghost",size:"icon",'
+            'triggerClassName:"h-7 w-7 text-muted-foreground opacity-70 '
+            'hover:bg-muted hover:opacity-100",'
+            'menuClassName:"w-[260px] rounded-xl p-1.5 shadow-xl",'
+            'items:[{key:"rename",label:"Rename session",icon:%(edit)s,'
+            'onSelect:()=>_kitRow.onStartEditingSession(%(conv)s.sessionId,'
+            '%(conv)s.sessionTitle)},'
+            # The one item without the Projects menu's loading and copied
+            # labels: those are component state, and this row has none to spare.
+            '{key:"copy",label:"Copy session ID",icon:%(copy)s,'
+            'onSelect:()=>%(api)s.providerSessionId(%(conv)s.sessionId)'
+            '.then(_r=>_r.json()).then(_j=>%(clip)s(_j?.data?.sessionId||""))'
+            '.catch(()=>{})},'
+            # Not offered while it runs, as the Projects menu does not offer it.
+            '...!_kitBusy?[{key:"delete",label:"Archive or delete session",'
+            'icon:%(trash)s,isDanger:!0,showDividerBefore:!0,onSelect:()=>'
+            '_kitRow.onDeleteSession(%(conv)s.projectId,%(conv)s.sessionId,'
+            '%(conv)s.sessionTitle,%(conv)s.provider)}]:[]]})})]},'
+            '%(conv)s.sessionId)') % names
+
+
+row, sig = ROW.search(s), SIG.search(s)
 end = s.find('recent.loadMore', sig.start()) if sig else -1
 scope = s[sig.start():end] if end > 0 else ''
-names = [n[0] for n in (ROW, EDIT, TRASH, COPY, APIO, CLIP) if n] + \
-        ([ROW[1]] if ROW else [])
-shadowed = [n for n in names if re.search(r'\b%s\b' % re.escape(n), scope)]
-counts = [len(CALL.findall(s)), len(SIG.findall(s)), len(CHEV.findall(s))]
-if len(names) == 7 and scope and not shadowed and counts == [1, 1, 1] \
-        and not re.search(r'\b_kitRow\b', s):
+found = [MENU, EDIT, TRASH, COPY, APIO, CLIP, SAVE, DROP, CARD, SPIN, TIP, LOGO,
+         LOCAL, XLATE]
+# Every minified name this reads, so each can be checked for a local of the
+# same name in the function being patched -- which would shadow it.
+borrowed = ([n[0] for n in found if n]
+            + ([MENU[1]] if MENU else []) + ([CARD[1]] if CARD else []))
+# A name merely appearing in that scope proves nothing -- the row already calls
+# two of these. What would break the row is a local BOUND to the same name, so
+# look for the shape of a binding: minified locals arrive as `name=` or as the
+# parameter of `name=>`.
+shadowed = [n for n in borrowed
+            if len(n) > 1 and re.search(r'\b%s\s*(?:=[^=]|=>)' % n, scope)]
+counts = [len(CALL.findall(s)), len(SIG.findall(s)), len(ROW.findall(s))]
+if all(found) and scope and not shadowed and counts == [1, 1, 1] \
+        and not re.search(r'\b_kit\w*\b', s):
     s = CALL.sub(r'selectedSession:\1.selectedSession,'
                  r'currentTime:\1.currentTime,_kitRow:\1,', s, count=1)
     s = SIG.sub(r'hasError:\1,selectedSession:\2,currentTime:\3,_kitRow,', s, count=1)
-    s = CHEV.sub(MENU % {'menu': ROW[0], 'dots': ROW[1], 'edit': EDIT[0],
-                         'copy': COPY[0], 'trash': TRASH[0], 'api': APIO[0],
-                         'clip': CLIP[0]}, s, count=1)
-    applied.append('conversation menu')
+    row = ROW.search(s)                 # the two edits above moved it
+    s = s[:row.start()] + kit_row({
+        'conv': LOCAL[2], 'sel': LOCAL[0], 'age': LOCAL[3], 'now': LOCAL[5],
+        'click': LOCAL[6], 't': XLATE[2], 'cn': CARD[0], 'btn': CARD[1],
+        'tip': TIP[0], 'spin': SPIN[0], 'logo': LOGO[0], 'menu': MENU[0],
+        'dots': MENU[1], 'edit': EDIT[0], 'copy': COPY[0], 'trash': TRASH[0],
+        'api': APIO[0], 'clip': CLIP[0], 'check': SAVE[0], 'cross': DROP[0],
+    }) + s[row.end():]
+    applied.append('conversation row')
 else:
-    missing.append('conversation menu (%s matches, %d/7 names%s)'
-                   % ('/'.join(str(c) for c in counts), len(names),
+    missing.append('conversation row (%s matches, %d/14 names%s)'
+                   % ('/'.join(str(c) for c in counts), len([n for n in found if n]),
                       ', %s shadowed' % ','.join(shadowed) if shadowed else ''))
 
-# (7) A rename or a delete made from that menu has to reach the list it was
+# (6) A rename or a delete made from that menu has to reach the list it was
 # made from. Upstream refetches the archived sessions when one is deleted and
 # the projects when one is renamed; the recent list, which until now had
 # neither action, is refetched by neither -- it would keep showing the old
