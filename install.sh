@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
-# Install the parts of cloudcli-kit that a plugin cannot carry.
-#
-# The Recent-conversations TAB is a plugin -- install that from CloudCLI's own
-# Settings > Plugins by pasting this repo's URL. Nothing here is needed for it.
-#
-# This script installs the rest, which is everything that has to be in place
-# before the app renders or before the server starts, and therefore cannot be a
-# plugin (a plugin's module is imported only when its tab is activated):
+# Install cloudcli-kit: one stylesheet, and a launcher that applies it and the
+# rest of the patches to the installed package on every start, so a package
+# upgrade cannot silently revert them.
 #
 #   ~/.config/cloudcli/ide-theme.css   appearance -- yours to retune, seeded once
 #   ~/bin/cloudcli-start               applies it to the package on every start,
 #                                      so an upgrade cannot revert it
 #
 #   --force        overwrite ide-theme.css with the repo's copy (backs up first)
-#   --plugin       also install/update the plugin into ~/.claude-code-ui/plugins
 #   --no-apply     install the files but do not touch the package yet
 #
 # Never restarts anything: the running server and any in-flight session are left
@@ -25,13 +19,11 @@ CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
 BIN="${CLOUDCLI_BIN:-$HOME/bin}"
 PLUGINS="$HOME/.claude-code-ui/plugins"
 FORCE=0
-WITH_PLUGIN=0
 APPLY=1
 
 for arg in "$@"; do
   case $arg in
     --force) FORCE=1 ;;
-    --plugin) WITH_PLUGIN=1 ;;
     --no-apply) APPLY=0 ;;
     # The header comment above IS the help text, printed up to the first line
     # of code -- so editing one can never leave the other behind.
@@ -67,17 +59,25 @@ else
   echo "  installed $CONF/ide-theme.css"
 fi
 
-# --- un-seed the pill --------------------------------------------------------
-# The Recent list used to be servable as a page script as well as a plugin tab,
-# from a second copy of index.js here. The tab is the only way in now, and it is
-# mounted from the plugin directory, so this copy has no consumer. Keep a dated
-# copy only if it is something other than index.js -- nothing is lost otherwise.
+# --- what the retired Recent list left behind --------------------------------
+# The kit used to carry a Recent-conversations list of its own: first a floating
+# pill served from a copy here, then a plugin tab. The sidebar's Conversations
+# tab is that list now, patched to show what the pill and the tab were for, so
+# both are gone. The pill's copy is un-seeded (dated first, since it is a file
+# you could have edited); the plugin directory is only reported, because it is a
+# real clone with a UI switch beside it, and removing either is yours to do.
 if [[ -f $CONF/ide-recent.js ]]; then
-  echo "recent-conversations pill (removed):"
-  cmp -s "$REPO/index.js" "$CONF/ide-recent.js" || stamp "$CONF/ide-recent.js"
+  echo "recent-conversations pill (retired):"
+  stamp "$CONF/ide-recent.js"
   rm -f "$CONF/ide-recent.js"
-  echo "  un-seeded $CONF/ide-recent.js -- the plugin tab replaces it"
+  echo "  un-seeded $CONF/ide-recent.js"
 fi
+for d in "$PLUGINS"/cloudcli-kit "$PLUGINS"/cloudcli-recent; do
+  [[ -d $d ]] || continue
+  echo "recent-conversations tab (retired):"
+  echo "  $d is still installed -- disable it in Settings > Plugins, then"
+  echo "  rm -rf $d"
+done
 
 # --- launcher ----------------------------------------------------------------
 echo "launcher:"
@@ -93,32 +93,6 @@ case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "  note: $BIN is not on PATH -- call it by full path, or add it" ;;
 esac
-
-# --- optional: the plugin, without going through the UI ----------------------
-# scanPlugins() iterates with withFileTypes and tests isDirectory(), which is
-# false for a symlink -- so a symlinked plugin is silently never discovered.
-# It has to be a real directory, which means a clone (or a copy).
-if [[ $WITH_PLUGIN == 1 ]]; then
-  echo "plugin:"
-  mkdir -p "$PLUGINS"
-  ORIGIN="$(git -C "$REPO" remote get-url origin 2>/dev/null || true)"
-  NAME="$(basename "${ORIGIN%.git}" 2>/dev/null || true)"
-  [[ -n $NAME && $NAME != . ]] || NAME="$(basename "$REPO")"
-  DEST="$PLUGINS/$NAME"
-  if [[ -d $DEST/.git ]]; then
-    git -C "$DEST" pull --ff-only --quiet && echo "  updated $DEST"
-  elif [[ -d $DEST ]]; then
-    echo "  $DEST exists and is not a clone -- leaving it alone"
-  elif [[ -n $ORIGIN ]]; then
-    git clone --depth 1 --quiet -- "$ORIGIN" "$DEST" && echo "  cloned $ORIGIN -> $DEST"
-  else
-    cp -R "$REPO" "$DEST"
-    rm -rf "$DEST/.git"
-    echo "  copied $REPO -> $DEST (no origin remote, so the UI's Update button"
-    echo "  will not work -- push the repo and re-run to get a real clone)"
-  fi
-  echo "  enable it in Settings > Plugins (a browser reload lists it)"
-fi
 
 # --- apply to the installed package -----------------------------------------
 if [[ $APPLY == 1 ]]; then

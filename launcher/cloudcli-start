@@ -64,9 +64,10 @@ done
 CSS="$PKG/dist/ide-theme.css"
 VER=""
 
-# An earlier version of this script could also serve the Recent list as a
-# floating pill. It is gone -- the plugin's own tab is the way in -- so clear
-# the copy it served; index.html's tag for it is dropped below.
+# Earlier versions served a Recent-conversations list of their own, first as a
+# floating pill and then as a plugin tab. Both are gone: the sidebar's own
+# Conversations tab, with the patches below, is that list. Clear the copy the
+# pill served; index.html's tag for it is dropped further down.
 rm -f "$PKG/dist/ide-recent.js"
 
 # --- patch 1: appearance (colours, chat typography, full width) --------------
@@ -1073,10 +1074,6 @@ if [[ -n $VER ]]; then
   check "accent variable"    "$ACSS" '--primary:'
   check "accent substitution" "$ACSS" 'blue-'
 fi
-# The Recent panel's two anchors are checked even though nothing here serves it:
-# the plugin tab mounts index.js from the plugin directory, and it needs both.
-check "panel deep links"   "$AJS"  'session/:sessionId'
-check "panel auth token"   "$AJS"  'auth-token'
 if (( miss )); then
   echo "anchors: $ok ok, $miss MISSING -- those overrides will not apply; see the kit README" >&2
 elif (( ok )); then

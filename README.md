@@ -1,22 +1,26 @@
 # cloudcli-kit
 
 Personal customisations for [CloudCLI UI](https://github.com/siteboon/claudecodeui) — a
-plugin, a stylesheet, and a launcher that re-applies both on every start, so a package
-upgrade cannot silently revert them.
+stylesheet and a launcher that re-applies it, and everything below, on every start, so a
+package upgrade cannot silently revert them.
 
-Two things go in, and they install differently because CloudCLI's plugin API can only carry
-one of them:
+Surfaces, accent, typography, inline code, full-width chat. Conversations as the sidebar's
+default, with a dot on the ones that are working and the Projects list's session menu on
+every row. Each model described, priced, and pruned in the model menu. Enter for a newline,
+⌘/Ctrl+Enter to send. A Stop that always stops, and a message typed mid-turn steering the
+turn it lands in. One command: `./install.sh`.
 
-| | What it is | How it installs |
-|---|---|---|
-| **Recent** tab | Every project's conversations in one recency-ordered list, with a chip for the ones that stopped to ask you something | Settings → Plugins → paste this repo's URL |
-| Appearance + behaviour | Surfaces, accent, typography, inline code, full-width chat; Conversations as the sidebar's default, with a dot on the ones that are working and the Projects list's session menu on every row; each model described, priced, and pruned in the model menu; Enter for a newline, ⌘/Ctrl+Enter to send; a Stop that always stops, and a message typed mid-turn steering the turn it lands in | `./install.sh` |
+## Why a launcher and not a plugin
 
-## Why the split
+CloudCLI has a plugin API, and this kit used to use it — a **Recent** tab listing every
+project's conversations by recency, with a chip on the ones that had stopped to ask you
+something. It is [retired](#the-retired-recent-tab): the sidebar's own Conversations tab,
+once patched as described below, is that list, in the place you already look.
 
-A plugin's module is fetched and `import()`ed **when its tab is activated**, and torn down
-via `unmount()` when you navigate away. That is exactly right for a tab, and structurally
-wrong for everything else here:
+Which leaves the plugin API carrying none of this, and it could not have. A plugin's module
+is fetched and `import()`ed **when its tab is activated**, and torn down via `unmount()`
+when you navigate away. That is exactly right for a tab, and structurally wrong for
+everything here:
 
 - **A stylesheet must be in effect at first paint, on every page load.** As a plugin it
   would apply only after you visited the tab, and only until you left it.
@@ -27,36 +31,29 @@ wrong for everything else here:
   eye. That is a filesystem job, not a browser job.
 - **The model options live in the server's own module.** Dropping one, or giving one a
   description worth reading, is an edit to a file on disk. No plugin surface reaches it.
-- **Four of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
+- **Six of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
   switch is React state; the model menu never passes the description to the menu component
-  that would render it; the Conversations list is never handed the running-session state
-  its sibling lists draw a dot from; and the Enter key sends by default. None of the first
-  three is reachable from CSS, and a plugin runs too late and in the wrong scope to change
-  any of them. The fourth *is* stored in the browser, but a plugin could only overwrite the
-  value you chose — the bundle edit changes the default and leaves your choice alone.
+  that would render it; the Conversations list is never handed the running-session state its
+  sibling lists draw a dot from, nor the handlers behind the session menu its sibling rows
+  end in, nor a refetch when one of those handlers changes something; and the Enter key sends
+  by default. None of the first five is reachable from CSS, and a plugin runs too late and in
+  the wrong scope to change any of them — the very rows it would have to reach are rendered
+  and gone before its module is fetched. The sixth *is* stored in the browser, but a plugin
+  could only overwrite the value you chose — the bundle edit changes the default and leaves
+  your choice alone.
 
-So the plugin is the plugin, and the rest is one file plus a launcher. The upside of doing
-it this way rather than forking CloudCLI: nothing here lives in a file upstream also edits,
-so there is never a merge — upgrading is `npm i -g @cloudcli-ai/cloudcli` and one launcher
-run. (Upstream ships a release roughly every 4–5 days, and does not commit `dist/`, so a
-fork would mean a weekly merge *plus* a vite + tsc build with two native modules.)
+So it is one stylesheet plus a launcher. The upside of doing it this way rather than forking
+CloudCLI: nothing here lives in a file upstream also edits, so there is never a merge —
+upgrading is `npm i -g @cloudcli-ai/cloudcli` and one launcher run. (Upstream ships a
+release roughly every 4–5 days, and does not commit `dist/`, so a fork would mean a weekly
+merge *plus* a vite + tsc build with two native modules.)
 
 ## Install
-
-The plugin, on any machine:
-
-> Settings → Plugins → paste the repo URL → Install → Enable
-
-It has no `package.json` on purpose, so the registry skips `npm install` and `npm run
-build` entirely: install and update are a bare `git clone --depth 1` / `git pull
---ff-only`. The **Update** button in the UI is all a later version needs.
-
-Everything else:
 
 ```bash
 git clone https://github.com/<you>/cloudcli-kit.git
 cd cloudcli-kit
-./install.sh                # add --plugin to install the tab without the UI
+./install.sh
 ```
 
 That seeds one file and installs the launcher:
@@ -69,27 +66,24 @@ That seeds one file and installs the launcher:
 Nothing is restarted, so it is safe to run while a session is in progress; reload the
 browser to see the result.
 
-## The tab
+## The retired Recent tab
 
-[`index.js`](index.js) is the whole plugin — one file, no build step, no dependencies. It
-renders into a shadow root, so the app's styles and these can never collide, while CSS custom
-properties still inherit *through* the boundary — which is why the panel tracks the active
-theme and any retune without reading `api.context.theme` at all.
+The tab was a plugin — one file, a shadow root, no build step — and it existed because
+CloudCLI's sidebar did not show what it showed: every project's conversations in one
+recency-ordered list, each marked *working* if the server had it in
+`/api/providers/sessions/running`, or *your turn* if it was not running and its transcript
+had been touched in the last 6 hours (`lastActivity` comes off the JSONL's mtime, which
+advances while Claude writes, so a recently stopped session is the one that just asked).
 
-### What the chips mean
+The sidebar's Conversations tab is that list, and the patches below give it the rest: it is
+the tab you land on, its rows carry the working and needs-an-answer dots, and each row has
+the session menu the Projects list always had. So the tab was a second place to look at the
+same thing, in a corner of the window, and it is gone — `git log -- index.js` if you ever
+want it back.
 
-CloudCLI tracks sessions that are *running* — the Active tab, backed by an in-memory
-registry. It tracks nothing about the state you actually go looking for: a session that
-stopped because Claude asked you something. Those leave the Active tab the moment they stop.
-
-- **working** — in `/api/providers/sessions/running`
-- **your turn** — not running, and its transcript was touched in the last 6 hours. The
-  server reads `lastActivity` off the JSONL's mtime, which advances while Claude writes, so
-  a recently stopped session is the one that just asked.
-
-The list is fetched on open and on demand, never polled: `/api/projects` broadcasts a
-`loading_progress` frame to every websocket client and the app renders it as a progress
-indicator, so a background poll would make the whole UI flicker.
+The launcher un-seeds what its earlier floating-pill version left behind, and `install.sh`
+reports a still-installed plugin directory rather than deleting it: that is a clone with a
+switch beside it in Settings → Plugins, and removing either is yours to do.
 
 ## Six small edits in the bundle
 
@@ -296,9 +290,6 @@ never edits.
 ## Notes
 
 - **JetBrains Mono** must be installed on the machine running the *browser*, not the server.
-- **Don't symlink this repo into `~/.claude-code-ui/plugins/`.** The registry iterates with
-  `withFileTypes` and tests `isDirectory()`, which is false for a symlink, so the plugin
-  would silently never be discovered. `install.sh --plugin` clones or copies instead.
 - The stylesheet lands at the **dist root**, not `dist/assets/`: the bundled service worker is
   cache-first for `/assets/` and network-first elsewhere, so a file there could be served
   stale. The server also sends `Cache-Control: immutable` for every static file, which is why
@@ -316,9 +307,9 @@ never edits.
   somewhere other than `~/.config/cloudcli`).
   `CLOUDCLI_PREFIX` and `CLOUDCLI_CONF` move the paths themselves, for an install that is not
   where the launcher looks.
-- Delete `~/.config/cloudcli/ide-theme.css` and the next launcher run cleanly un-links it. An
-  earlier version of the launcher could also serve the Recent list as a floating pill; that is
-  gone, and both scripts un-link what it left behind on a machine that ran it.
+- Delete `~/.config/cloudcli/ide-theme.css` and the next launcher run cleanly un-links it.
+  Earlier versions served a Recent list of their own — a floating pill, then a plugin tab —
+  and both scripts clean up after the pill on a machine that ran it.
 - [`systemd/cloudcli.service`](systemd/cloudcli.service) is the user unit this is deployed
   under, kept here as a copy rather than installed by `install.sh` — putting a unit in place
   is enabling and starting a service, which is a decision, not a file operation. Copy it to
