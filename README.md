@@ -7,9 +7,9 @@ package upgrade cannot silently revert them.
 Surfaces, accent, typography, inline code, full-width chat. Conversations as the sidebar's
 default, its rows drawn the way the Projects list draws a session — the activity dot, the
 spinner, the session menu — plus the project each one belongs to. Each model described,
-priced, and pruned in the model menu. Enter for a newline,
-⌘/Ctrl+Enter to send. A Stop that always stops, and a message typed mid-turn steering the
-turn it lands in. One command: `./install.sh`.
+priced, and pruned in the model menu. The CLI's own commands — `/compact` among them — in the
+composer's command menu. Enter for a newline, ⌘/Ctrl+Enter to send. A Stop that always stops,
+and a message typed mid-turn steering the turn it lands in. One command: `./install.sh`.
 
 ## Why a launcher and not a plugin
 
@@ -32,15 +32,16 @@ everything here:
   eye. That is a filesystem job, not a browser job.
 - **The model options live in the server's own module.** Dropping one, or giving one a
   description worth reading, is an edit to a file on disk. No plugin surface reaches it.
-- **Five of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
+- **Six of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
   switch is React state; the model menu never passes the description to the menu component
   that would render it; a Conversations row is drawn without the activity, the spinner or the
   menu its sibling rows have, and nothing refetches that list when one of those actions
-  changes something; and the Enter key sends by default. None of the first four is reachable
-  from CSS, and a plugin runs too late and in the wrong scope to change any of them — the very
-  rows it would have to reach are rendered and gone before its module is fetched. The fifth
-  *is* stored in the browser, but a plugin could only overwrite the value you chose — the
-  bundle edit changes the default and leaves your choice alone.
+  changes something; the composer's command menu is assembled from three sources, none of
+  which is the CLI's own commands; and the Enter key sends by default. None of the first five
+  is reachable from CSS, and a plugin runs too late and in the wrong scope to change any of
+  them — the very rows and menus it would have to reach are rendered and gone before its
+  module is fetched. The sixth *is* stored in the browser, but a plugin could only overwrite
+  the value you chose — the bundle edit changes the default and leaves your choice alone.
 
 So it is one stylesheet plus a launcher. The upside of doing it this way rather than forking
 CloudCLI: nothing here lives in a file upstream also edits, so there is never a merge —
@@ -85,10 +86,10 @@ The launcher un-seeds what its earlier floating-pill version left behind, and `i
 reports a still-installed plugin directory rather than deleting it: that is a clone with a
 switch beside it in Settings → Plugins, and removing either is yours to do.
 
-## Five small edits in the bundle
+## Six small edits in the bundle
 
 Three are things the app already almost does; one is a default worth flipping; one is a
-list keeping itself current:
+list keeping itself current; one is a menu that never listed what the CLI can do:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
   never persisted, so it reset to Projects on every load.
@@ -118,6 +119,24 @@ list keeping itself current:
   call: the same page-zero fetch the sidebar's own refresh button makes. (The PR upstream
   patches the loaded rows in place instead, which also keeps the pages a reader has loaded
   past the first; reaching those state setters through the minifier is not worth it here.)
+- **The CLI's own commands, in the command menu.** That menu offers three things — six
+  built-ins the *server* implements, the provider's skills, and whatever sits in
+  `.claude/commands` — and never the commands the **CLI** implements. `/compact` above all,
+  which is the one you reach for when a session grows long. Nothing was broken, only
+  invisible: typing `/compact` in full and pressing Enter already worked, because a query
+  matching nothing falls through to an ordinary send and the CLI reads slash commands from the
+  same stream-json channel the server already talks to. So the menu was the whole gap. Five
+  are listed — `/compact`, `/context`, `/usage`, `/model`, `/clear` — each checked against the
+  CLI on that channel, each answered by the CLI itself with no model call. They are *inserted*
+  into the composer rather than executed, which is how the menu already treats a skill: the
+  app has no handler for them and needs none, since sending the line is what does the work.
+  Claude sessions only; the other providers would take them for a prompt.
+
+  The list is short and hand-kept because a substitution cannot do better. The CLI advertises
+  its whole list — 63 on this machine, skills and plugins included — in the `init` frame of
+  every run, and reading *that* is the honest fix: the server drops the frame before the
+  browser sees it, and a patched server module would only land on the next restart. That one
+  belongs upstream.
 - **Enter for a newline, ⌘/Ctrl+Enter to send.** This one the app does have a setting for —
   Quick Settings (the tab on the right edge of the window) → Input Settings → *Send by
   Ctrl+Enter* — it just defaults off, so every browser starts out sending on Enter. The patch
@@ -144,12 +163,12 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 6/6 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, conversation row, conversation refresh
+frontend: 7/7 applied -- sidebar default, model description, ctrl+enter to send,
+send while running, conversation row, conversation refresh, cli commands
 ```
 
-Six because one of them, *send while running*, belongs to steering — described with it
-below. `CLOUDCLI_STEER=0` leaves it out and the run prints `5/5`.
+Seven because one of them, *send while running*, belongs to steering — described with it
+below. `CLOUDCLI_STEER=0` leaves it out and the run prints `6/6`.
 
 Several are read from more than one anchor: the conversation row alone borrows twelve names
 the minifier chose — the classname helper and button variants that give a session row its

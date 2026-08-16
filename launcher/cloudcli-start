@@ -538,6 +538,63 @@ else:
                    % ('/'.join(str(c) for c in counts),
                       '' if FETCH else ', fetch unnamed'))
 
+# (7) The CLI's own commands, in the composer's command menu. That menu offers
+# three things: six built-ins the SERVER implements (help, models, cost, memory,
+# config, status), the skills the provider reports, and whatever sits in
+# .claude/commands. What it never offers is the commands the CLI itself
+# implements -- /compact above all -- so the one you reach for when a session
+# grows long is the one that is not there.
+#
+# Nothing was broken, only invisible: typing /compact in full and pressing enter
+# already works, because a query matching nothing falls through to an ordinary
+# send, and the CLI reads slash commands from the stream-json channel this
+# server already talks to. So the menu is the whole gap, and the fix is to list
+# them and let the send do what it already does.
+#
+# Each is inserted into the composer rather than executed, which is how the menu
+# already treats a skill: the app has no handler for these and needs none -- the
+# CLI does the work when the line is sent. So the skill test learns one more
+# type, and the fetch that merges the three sources gains a fourth.
+#
+# Only commands checked against the CLI over that channel are listed, which is
+# why the list is short and hand-kept: `claude -p --input-format stream-json`
+# answers each of these itself, instantly, with no model call. The CLI
+# advertises its whole list (63 here, skills and plugins included) in the init
+# frame of every run -- the honest fix is to read that, which upstream should do
+# and a substitution cannot: the server drops the frame before the browser sees
+# it, and a patched server module only lands on a restart.
+CLI_CMDS = (
+    '[{name:"/compact",description:"Summarise the conversation and carry on '
+    'with a smaller context",namespace:"builtin",type:"cli"},'
+    '{name:"/context",description:"Show what is filling the context window",'
+    'namespace:"builtin",type:"cli"},'
+    '{name:"/usage",description:"Cost and duration of this session so far",'
+    'namespace:"builtin",type:"cli"},'
+    '{name:"/model",description:"Show the model and effort, or switch one: '
+    '/model haiku",namespace:"builtin",type:"cli"},'
+    '{name:"/clear",description:"Start a fresh context -- the transcript above '
+    'stays on screen",namespace:"builtin",type:"cli"}]'
+)
+# namespace:"builtin" is what the menu groups and colours by, so these sit with
+# the app's own built-ins rather than under "Other".
+PROV = kit_names(r'/api/providers/\$\{encodeURIComponent\((\w+)\)\}/skills')
+MERGE = re.compile(r'\.\.\.\((\w+)\.custom\|\|\[\]\)\.map\((\w+)=>'
+                   r'\(\{\.\.\.\2,type:"custom"\}\)\)\]')
+SKILL = re.compile(r'(\w+)=>\1\.type==="skill"\|\|\1\.metadata\?\.type==="skill"')
+counts = [len(MERGE.findall(s)), len(SKILL.findall(s))]
+if PROV and counts == [1, 1]:
+    # Claude only: these are its commands, and the menu is shared with the other
+    # providers, whose runtimes would take them for a prompt.
+    s = MERGE.sub(r'...(\1.custom||[]).map(\2=>({...\2,type:"custom"})),'
+                  r'...(%s==="claude"?%s:[])]' % (PROV[0], CLI_CMDS), s, count=1)
+    s = SKILL.sub(r'\1=>\1.type==="skill"||\1.type==="cli"'
+                  r'||\1.metadata?.type==="skill"', s, count=1)
+    applied.append('cli commands')
+else:
+    missing.append('cli commands (%s matches%s)'
+                   % ('/'.join(str(c) for c in counts),
+                      '' if PROV else ', provider unnamed'))
+
 open(out, 'w').write(s)
 for m in missing:
     print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
