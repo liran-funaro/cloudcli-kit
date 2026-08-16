@@ -553,8 +553,13 @@ else:
 #
 # Each is inserted into the composer rather than executed, which is how the menu
 # already treats a skill: the app has no handler for these and needs none -- the
-# CLI does the work when the line is sent. So the skill test learns one more
-# type, and the fetch that merges the three sources gains a fourth.
+# CLI does the work when the line is sent. So the fetch that merges the three
+# sources gains a fourth, and BOTH of the app's "would I execute this?" tests
+# learn one more type -- the menu's, which is a named predicate, and the
+# composer's, which inlines `type !== "skill"` when a typed line starts with a
+# slash. Miss the second and listing a command is worse than not listing it: the
+# line that used to fall through to the CLI now matches something the app tries
+# to execute, and the server refuses it for having no file behind it.
 #
 # Only commands checked against the CLI over that channel are listed, which is
 # why the list is short and hand-kept: `claude -p --input-format stream-json`
@@ -581,14 +586,16 @@ PROV = kit_names(r'/api/providers/\$\{encodeURIComponent\((\w+)\)\}/skills')
 MERGE = re.compile(r'\.\.\.\((\w+)\.custom\|\|\[\]\)\.map\((\w+)=>'
                    r'\(\{\.\.\.\2,type:"custom"\}\)\)\]')
 SKILL = re.compile(r'(\w+)=>\1\.type==="skill"\|\|\1\.metadata\?\.type==="skill"')
-counts = [len(MERGE.findall(s)), len(SKILL.findall(s))]
-if PROV and counts == [1, 1]:
+SEND = re.compile(r'if\((\w+)&&\1\.type!=="skill"\)\{')
+counts = [len(MERGE.findall(s)), len(SKILL.findall(s)), len(SEND.findall(s))]
+if PROV and counts == [1, 1, 1]:
     # Claude only: these are its commands, and the menu is shared with the other
     # providers, whose runtimes would take them for a prompt.
     s = MERGE.sub(r'...(\1.custom||[]).map(\2=>({...\2,type:"custom"})),'
                   r'...(%s==="claude"?%s:[])]' % (PROV[0], CLI_CMDS), s, count=1)
     s = SKILL.sub(r'\1=>\1.type==="skill"||\1.type==="cli"'
                   r'||\1.metadata?.type==="skill"', s, count=1)
+    s = SEND.sub(r'if(\1&&\1.type!=="skill"&&\1.type!=="cli"){', s, count=1)
     applied.append('cli commands')
 else:
     missing.append('cli commands (%s matches%s)'

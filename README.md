@@ -132,6 +132,13 @@ list keeping itself current; one is a menu that never listed what the CLI can do
   app has no handler for them and needs none, since sending the line is what does the work.
   Claude sessions only; the other providers would take them for a prompt.
 
+  Both of the app's *would I execute this?* tests have to learn the new type — the menu's,
+  which is a named predicate, and the composer's, which inlines `type !== "skill"` when a typed
+  line starts with a slash. Missing the second makes listing a command worse than not listing
+  it: the line that used to fall through to the CLI starts matching something the app tries to
+  execute, and the server refuses it for having no file behind it
+  (*Command path is required for custom commands*).
+
   The list is short and hand-kept because a substitution cannot do better. The CLI advertises
   its whole list — 63 on this machine, skills and plugins included — in the `init` frame of
   every run, and reading *that* is the honest fix: the server drops the frame before the
