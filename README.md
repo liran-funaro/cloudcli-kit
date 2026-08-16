@@ -10,7 +10,7 @@ one of them:
 | | What it is | How it installs |
 |---|---|---|
 | **Recent** tab | Every project's conversations in one recency-ordered list, with a chip for the ones that stopped to ask you something | Settings → Plugins → paste this repo's URL |
-| Appearance + behaviour | Surfaces, accent, typography, inline code, full-width chat; Conversations as the sidebar's default, with a dot on the ones that are working; each model described, priced, and pruned in the model menu; Enter for a newline, ⌘/Ctrl+Enter to send | `./install.sh` |
+| Appearance + behaviour | Surfaces, accent, typography, inline code, full-width chat; Conversations as the sidebar's default, with a dot on the ones that are working and the Projects list's session menu on every row; each model described, priced, and pruned in the model menu; Enter for a newline, ⌘/Ctrl+Enter to send; a Stop that always stops, and a message typed mid-turn steering the turn it lands in | `./install.sh` |
 
 ## Why the split
 
@@ -91,9 +91,10 @@ The list is fetched on open and on demand, never polled: `/api/projects` broadca
 `loading_progress` frame to every websocket client and the app renders it as a progress
 indicator, so a background poll would make the whole UI flicker.
 
-## Four small edits in the bundle
+## Six small edits in the bundle
 
-Three are things the app already almost does; the fourth is a default worth flipping:
+Four are things the app already almost does; one is a default worth flipping; one is a
+list keeping itself current:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
   never persisted, so it reset to Projects on every load.
@@ -105,6 +106,22 @@ Three are things the app already almost does; the fourth is a default worth flip
   even though its own call site already reads two other fields off the very object that holds
   it. So the patch passes them along and reuses the app's own indicator: green for working,
   amber for a session waiting on an answer.
+- **The session menu on a Conversations row.** Both lists show the same sessions, and the
+  Projects one ends each row in a three-dot menu — rename, copy the provider session id,
+  archive or delete — while the Conversations one ended in a chevron that says nothing the
+  row does not, since the row is already a link. So the menu moves into the chevron's slot:
+  the app's own `ActionMenu`, its own icons, its own handlers. Nothing had to be
+  reimplemented, because rename and delete key on the session id alone — their `projectId`
+  and `provider` arguments are compatibility parameters upstream marks unused — so a row
+  that holds no Project and no session object, only a conversation summary, can still drive
+  both, and rename reuses the editing state the sidebar already keeps. The one thing not
+  carried over is the copy item's *loading* / *copied* labels, which are component state
+  this row has none of; it copies, and says only that it copies.
+- **A rename or a delete refreshing the list it was made from.** Upstream refetches the
+  archived sessions when one is deleted and the projects when one is renamed. The
+  Conversations list, which until now had neither action, was refetched by neither — it
+  would keep showing the old title, or a row whose session is gone. Both paths get one more
+  call: the same page-zero fetch the sidebar's own refresh button makes.
 - **Enter for a newline, ⌘/Ctrl+Enter to send.** This one the app does have a setting for —
   Quick Settings (the tab on the right edge of the window) → Input Settings → *Send by
   Ctrl+Enter* — it just defaults off, so every browser starts out sending on Enter. The patch
@@ -131,10 +148,20 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 4/4 applied -- sidebar default, model description, conversation status, ctrl+enter to send
+frontend: 7/7 applied -- sidebar default, model description, conversation status, ctrl+enter
+to send, send while running, conversation menu, conversation refresh
 ```
 
-A fifth appears only with steering on, and is described with it below.
+Seven because one of them, *send while running*, belongs to steering — described with it
+below. `CLOUDCLI_STEER=0` leaves it out and the run prints `6/6`.
+
+The six above are read from more than one anchor each: the menu alone needs the
+`ActionMenu` component, three icons, the api object and the clipboard helper, none of which
+has a name of its own after minification. Not one is guessed. Each is read from a site that
+says which is which — the Projects menu names its own component and icons, the copy-state
+ternary names the clipboard icon, the api object comes from its own call — and a name that
+already appears inside the function being patched is treated as a possible local that would
+shadow it, which skips the patch rather than risking it.
 
 ## The model menu
 
@@ -186,10 +213,10 @@ That line is the only sign it was needed. Stop working is what it looks like oth
 ## Steering a turn in flight
 
 ```bash
-CLOUDCLI_STEER=1 cloudcli-start
+CLOUDCLI_STEER=0 cloudcli-start     # to turn it off
 ```
 
-Experimental, off by default, and the other side of the same coin as Stop. Upstream holds a
+On by default, and the other side of the same coin as Stop. Upstream holds a
 message typed while a turn is running — it becomes a draft, sent once the run ends. But the
 stdin that carries `interrupt()` is open for the whole run: the SDK spawns the CLI with
 `--input-format stream-json` unconditionally, and the string-prompt path writes its one user
@@ -213,10 +240,10 @@ Three things it has to get right:
   conversation it has no record of being redirected. Without this the steer is real but
   invisible — the model reacts, and the message is gone on the next reload.
 
-The browser half is the fifth bundle substitution: the composer's busy guard learns one
-condition, so a send during a run goes out instead of becoming a draft. Even with the flag on it
-stays dormant until `__cloudcliSteer = true` in the console, so it can be tried and dropped
-without a restart.
+The browser half is one of the bundle substitutions: the composer's busy guard learns one
+condition, so a send during a run goes out instead of becoming a draft. It is still guarded on a
+global rather than compiled in, but the sense is now the escape hatch — `__cloudcliSteer = false`
+in the console puts a tab back on upstream's hold-it-back composer mid-session, with no restart.
 
 ```
 chat: applied steering history, steering channel, steerable runs, steerable marker, steering
@@ -226,8 +253,8 @@ cleanup, steering export, steering passthrough, steering route; 1 already in pla
 
 Eight edits across three server modules, so it is all-or-nothing by construction — a facade
 naming a function that failed to be inserted is a ReferenceError at import, i.e. a server that
-does not start. And every one of them is **reversed** when the flag is off, back to byte-identical
-with what upstream shipped. Turning steering off is a restart, not a reinstall.
+does not start. And every one of them is **reversed** by `CLOUDCLI_STEER=0`, back to
+byte-identical with what upstream shipped. Turning steering off is a restart, not a reinstall.
 
 ## Retuning the appearance
 
@@ -284,8 +311,8 @@ never edits.
   them — which would produce an install that imports fine and then fails on its first query.
   If the check trips it prints the `npm rebuild` line to fix it and starts nothing.
 - Everything is an environment knob, read on every start: `CLOUDCLI_PATCH_ONLY=1` (apply and
-  exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_STEER=1`
-  (steering, see above), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
+  exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_STEER=0`
+  (steering off, see above), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
   somewhere other than `~/.config/cloudcli`).
   `CLOUDCLI_PREFIX` and `CLOUDCLI_CONF` move the paths themselves, for an install that is not
   where the launcher looks.

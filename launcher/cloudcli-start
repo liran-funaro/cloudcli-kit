@@ -7,13 +7,14 @@
 #       Safe to run while a session is in progress -- the running server is
 #       untouched; the browser picks the changes up on its next reload.
 #
-#   CLOUDCLI_STEER=1 cloudcli-start
-#       Experimental (patch 5): let a message sent while a turn is running go
-#       INTO that turn instead of being held back as a draft, and record it in
-#       the CLI transcript so it survives a reload. Off by default.
-#       Even with it on the browser keeps upstream's behaviour until you flip
-#       `__cloudcliSteer = true` in the console, so it can be tried and dropped
-#       without a restart.
+#   CLOUDCLI_STEER=0 cloudcli-start
+#       Turn off steering (patch 5), which is otherwise ON: a message sent
+#       while a turn is running goes INTO that turn instead of being held back
+#       as a draft, and is recorded in the CLI transcript so it survives a
+#       reload. Off reverses all eight server edits, back to byte-identical
+#       with what upstream shipped.
+#       In a tab that is already open, `__cloudcliSteer = false` in the console
+#       restores upstream's hold-it-back composer without a restart.
 #
 # The appearance this applies is not carried here. It lives in
 # ~/.config/cloudcli/ide-theme.css, seeded by install.sh from the cloudcli-kit
@@ -31,7 +32,7 @@ CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
 SRC="${CLOUDCLI_THEME:-$CONF/ide-theme.css}"
 DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable best}"
 FRONTEND="${CLOUDCLI_FRONTEND:-1}"
-STEER="${CLOUDCLI_STEER:-0}"
+STEER="${CLOUDCLI_STEER:-1}"
 
 if [[ ! -d $PKG ]]; then
   echo "installing @cloudcli-ai/cloudcli into $PREFIX ..."
@@ -295,19 +296,157 @@ else:
 # send path -- which appends the bubble, clears the box and emits chat.send, all
 # of it already correct for a run in progress.
 #
-# Guarded on a global rather than compiled in: unset (the shipped state) is
-# upstream's behaviour exactly, and `__cloudcliSteer = true` in the console
-# turns it on for the tab, mid-session, with no reload. Matched structurally --
-# the busy flag, the override argument and the queue setter are all one-letter
-# minifier names that an upgrade will renumber, but the shape holds.
+# Guarded on a global rather than compiled in, so the tab keeps an escape
+# hatch: `__cloudcliSteer = false` in the console restores upstream's
+# hold-it-back composer mid-session, with no reload. Only that exact value
+# does -- unset means steer, matching the server half, which is on unless
+# CLOUDCLI_STEER=0. Matched structurally: the busy flag, the override argument
+# and the queue setter are all one-letter minifier names that an upgrade will
+# renumber, but the shape holds.
 if steer:
     BUSY = re.compile(r'if\((\w+)\)\{if\((\w+)\)\{(\w+)\.current=(\w+),(\w+)\(\2\);return\}')
     if len(BUSY.findall(s)) == 1:
-        s = BUSY.sub(r'if(\1&&!window.__cloudcliSteer){if(\2){\3.current=\4,\5(\2);'
+        s = BUSY.sub(r'if(\1&&window.__cloudcliSteer===!1){if(\2){\3.current=\4,\5(\2);'
                      r'return}', s, count=1)
         applied.append('send while running')
     else:
         missing.append('send while running (%d matches)' % len(BUSY.findall(s)))
+
+# (6) The Conversations list ends every row in a chevron that says nothing the
+# row does not -- it is already a link -- while the Projects list ends its
+# session rows in a three-dot menu that renames, copies the provider session id
+# and archives or deletes. Same sessions either way, so the same menu belongs
+# here, in the slot the chevron had: already the right size, already the right
+# place, no row to relayout.
+#
+# It is the app's own ActionMenu, with the app's own icons and the app's own
+# handlers. Everything the Projects row hands that component sits on the props
+# object this call site already reads selectedSession and currentTime off, so
+# one more prop carries the lot. Rename and delete key on the session id alone
+# -- their projectId and provider arguments are compatibility parameters
+# upstream marks unused -- so a row that holds neither a Project nor a session
+# object, only a conversation summary, can still drive both.
+#
+# Six of the names below are the minifier's, and not one is guessed: each is
+# read from a site that names itself, the Projects menu for the component and
+# its icons, the copy-state ternary for the clipboard icon, the api object from
+# its own call, the clipboard helper from its writeText branch. A name already
+# present in the target function could be a local that shadows it, so that is
+# checked too, and nothing is applied if it is.
+
+
+def kit_names(pattern):
+    """Names the minifier chose, from a site that says which is which.
+
+    Returns the groups of the one match, or None unless there is exactly one:
+    a second match means the shape no longer identifies what it used to.
+    """
+    found = list(re.finditer(pattern, s))
+    return found[0].groups() if len(found) == 1 else None
+
+
+ROW = kit_names(r's\.jsx\((\w+),\{label:"Session options",ariaLabel:`Session '
+                r'options for \$\{\w+\.sessionName\}`,icon:(\w+),iconOnly:!0')
+EDIT = kit_names(r'\{key:"rename",label:"Rename session",icon:(\w+),onSelect:')
+TRASH = kit_names(r'\{key:"delete",label:"Archive or delete session",'
+                  r'icon:(\w+),isDanger:!0')
+COPY = kit_names(r'\w+==="copied"\?\w+:(\w+),')
+APIO = kit_names(r'(\w+)\.providerSessionId\(')
+CLIP = kit_names(r'async function (\w+)\(\w+\)\{if\(!\w+\)return!1;let \w+=!1;'
+                 r'try\{typeof navigator<"u"&&navigator\.clipboard\?\.writeText')
+
+# The list's props, its own signature, and the chevron that ends each row.
+# Written to survive patch 3 having already run over the same three sites: each
+# anchor is a prefix of what that patch leaves behind.
+CALL = re.compile(r'selectedSession:(\w+)\.selectedSession,currentTime:\1\.currentTime,')
+SIG = re.compile(r'hasError:(\w+),selectedSession:(\w+),currentTime:(\w+),')
+CHEV = re.compile(r's\.jsx\(\w+,\{className:"h-3\.5 w-3\.5 flex-shrink-0 '
+                  r'text-muted-foreground/40 transition-transform '
+                  r'group-hover:translate-x-0\.5 group-hover:text-muted-foreground"\}\)'
+                  r'(\]\},(\w+)\.sessionId\))')
+MENU = (
+    's.jsx("span",{className:"flex flex-shrink-0 items-center",'
+    'onClick:_e=>{_e.preventDefault(),_e.stopPropagation()},children:'
+    # The row is a link and the menu lives inside it, so every click that
+    # belongs to the menu is stopped here rather than navigating.
+    '_kitRow?.editingSession===\\2.sessionId?'
+    # Renaming is the app's own editing state, keyed by session id, so the
+    # input needs no state of its own -- and the Projects list, wherever it is
+    # scrolled to, shows the same rename for the same session.
+    's.jsx("input",{type:"text","aria-label":"Session name",autoFocus:!0,'
+    'value:_kitRow.editingSessionName,'
+    'onChange:_e=>_kitRow.onEditingSessionNameChange(_e.target.value),'
+    'onBlur:()=>_kitRow.onCancelEditingSession(),'
+    'onKeyDown:_e=>{_e.stopPropagation(),_e.key==="Enter"?'
+    '_kitRow.onSaveEditingSession(\\2.projectId,\\2.sessionId,'
+    '_kitRow.editingSessionName,\\2.provider):'
+    '_e.key==="Escape"&&_kitRow.onCancelEditingSession()},'
+    'className:"w-28 rounded border border-border bg-background px-2 py-1 '
+    'text-xs focus:outline-none focus:ring-1 focus:ring-primary"}):'
+    's.jsx(%(menu)s,{label:"Session options",'
+    'ariaLabel:`Session options for ${\\2.sessionTitle}`,icon:%(dots)s,'
+    'iconOnly:!0,portal:!0,variant:"ghost",size:"icon",'
+    'triggerClassName:"h-7 w-7 text-muted-foreground opacity-70 hover:bg-muted '
+    'hover:opacity-100",menuClassName:"w-[260px] rounded-xl p-1.5 shadow-xl",'
+    'items:[{key:"rename",label:"Rename session",icon:%(edit)s,'
+    'onSelect:()=>_kitRow.onStartEditingSession(\\2.sessionId,\\2.sessionTitle)},'
+    # The one item without the Projects menu's loading and copied labels:
+    # those are component state, and this row has none to spare.
+    '{key:"copy",label:"Copy session ID",icon:%(copy)s,'
+    'onSelect:()=>%(api)s.providerSessionId(\\2.sessionId).then(_r=>_r.json())'
+    '.then(_j=>%(clip)s(_j?.data?.sessionId||"")).catch(()=>{})},'
+    '{key:"delete",label:"Archive or delete session",icon:%(trash)s,isDanger:!0,'
+    'showDividerBefore:!0,onSelect:()=>_kitRow.onDeleteSession(\\2.projectId,'
+    '\\2.sessionId,\\2.sessionTitle,\\2.provider)}]})})\\1'
+)
+sig = SIG.search(s)
+end = s.find('recent.loadMore', sig.start()) if sig else -1
+scope = s[sig.start():end] if end > 0 else ''
+names = [n[0] for n in (ROW, EDIT, TRASH, COPY, APIO, CLIP) if n] + \
+        ([ROW[1]] if ROW else [])
+shadowed = [n for n in names if re.search(r'\b%s\b' % re.escape(n), scope)]
+counts = [len(CALL.findall(s)), len(SIG.findall(s)), len(CHEV.findall(s))]
+if len(names) == 7 and scope and not shadowed and counts == [1, 1, 1] \
+        and not re.search(r'\b_kitRow\b', s):
+    s = CALL.sub(r'selectedSession:\1.selectedSession,'
+                 r'currentTime:\1.currentTime,_kitRow:\1,', s, count=1)
+    s = SIG.sub(r'hasError:\1,selectedSession:\2,currentTime:\3,_kitRow,', s, count=1)
+    s = CHEV.sub(MENU % {'menu': ROW[0], 'dots': ROW[1], 'edit': EDIT[0],
+                         'copy': COPY[0], 'trash': TRASH[0], 'api': APIO[0],
+                         'clip': CLIP[0]}, s, count=1)
+    applied.append('conversation menu')
+else:
+    missing.append('conversation menu (%s matches, %d/7 names%s)'
+                   % ('/'.join(str(c) for c in counts), len(names),
+                      ', %s shadowed' % ','.join(shadowed) if shadowed else ''))
+
+# (7) A rename or a delete made from that menu has to reach the list it was
+# made from. Upstream refetches the archived sessions when one is deleted and
+# the projects when one is renamed; the recent list, which until now had
+# neither action, is refetched by neither -- it would keep showing the old
+# title, or a row whose session is gone. So both paths get one more call: the
+# same page-zero fetch the sidebar's refresh button makes, read from that call
+# site so the name is the app's own. That function is declared with an empty
+# dependency list, which is what makes it safe to call from callbacks whose own
+# deps have gone stale -- a reason to reuse it rather than the searchMode-gated
+# wrapper right beside it, whose gate would be read from the wrong render.
+FETCH = kit_names(r'\w+==="conversations"\?(\w+)\(0,!1\):Promise\.resolve\(\)')
+RENAMED = re.compile(r'(\w+)\.ok\?await (\w+)\(\):\(console\.error\('
+                     r'"\[Sidebar\] Failed to rename session:"')
+DELETED = re.compile(r',await (\w+)\(\);else\{const (\w+)=await (\w+)\.text\(\);'
+                     r'console\.error\("\[Sidebar\] Failed to delete session:"')
+counts = [len(RENAMED.findall(s)), len(DELETED.findall(s))]
+if FETCH and counts == [1, 1]:
+    s = RENAMED.sub(r'\1.ok?(await \2(),%s(0,!1)):(console.error('
+                    r'"[Sidebar] Failed to rename session:"' % FETCH[0], s, count=1)
+    s = DELETED.sub(r',await \1(),%s(0,!1);else{const \2=await \3.text();'
+                    r'console.error("[Sidebar] Failed to delete session:"'
+                    % FETCH[0], s, count=1)
+    applied.append('conversation refresh')
+else:
+    missing.append('conversation refresh (%s matches%s)'
+                   % ('/'.join(str(c) for c in counts),
+                      '' if FETCH else ', fetch unnamed'))
 
 open(out, 'w').write(s)
 for m in missing:
