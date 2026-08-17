@@ -247,7 +247,11 @@ page_head() {
     font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--muted); border-bottom-color: var(--fg);
   }
-  td.n { text-align: right; padding-right: 18px; font-family: ui-monospace, SFMono-Regular, monospace; }
+  /* Both, and with the same padding, or the header's right edge sits 18px away
+     from the right edge of the numbers it is supposed to label. Marking the
+     header cell in the markup did nothing until this selector included it. */
+  th.n, td.n { text-align: right; padding-right: 18px; }
+  td.n { font-family: ui-monospace, SFMono-Regular, monospace; }
   tbody tr:last-child td { border-bottom: 0; }
   tr:hover td { background: var(--card); }
   .warn {
