@@ -602,6 +602,54 @@ else:
                    % ('/'.join(str(c) for c in counts),
                       '' if PROV else ', provider unnamed'))
 
+# (8) Today's spend, permanently on the page. The Cost tab is the report; this
+# is the one number worth seeing without going to look for it, in the sidebar
+# footer above Settings, where the app already stacks rows of exactly this shape.
+#
+# Its data is the json sidecar litellm-cost.sh writes beside the report, not the
+# report itself: the chip wants one number, and parsing a page to find it would
+# tie the chip to that page's markup. No key reaches the browser either way --
+# the file is already on disk, written by something that had the key.
+#
+# React state would be the obvious way to hold the number and the obvious way to
+# get it wrong from here: hooks have to be declared unconditionally, in order,
+# inside a component whose minified name is a guess away from being wrong. A ref
+# callback needs none of that. React calls it with the node on mount and null on
+# unmount, so the first mount starts one interval for the page's lifetime
+# (guarded, so re-mounting the sidebar does not start a second), and every later
+# render re-fills the node from the value already fetched -- which is why the
+# number survives a re-render rather than blinking back to a dash.
+COST_CHIP = (
+    's.jsx("div",{className:"hidden px-2 pt-1.5 md:block",children:'
+    's.jsx("div",{className:"flex w-full items-center gap-2 rounded-lg px-2.5 '
+    'py-1.5 text-muted-foreground",children:s.jsx("span",{className:"text-sm '
+    'tabular-nums","data-kit-cost":"1",title:"LiteLLM spend",'
+    'ref:_e=>{if(!_e)return;'
+    '_e.textContent=window.__kitCostText||"today —";'
+    '_e.title=window.__kitCostTitle||"LiteLLM spend: no report yet";'
+    'if(window.__kitCostTimer)return;'
+    'const _p=async()=>{try{'
+    'const _r=await fetch("/cost.json?t="+Date.now(),{cache:"no-store"});'
+    'if(!_r.ok)return;const _j=await _r.json();'
+    'window.__kitCostText="today $"+_j.today;'
+    'window.__kitCostTitle="LiteLLM spend — 7d $"+_j.last7+" · 30d $"+_j.last30'
+    '+" · lifetime $"+_j.lifetime+" · generated "+_j.generated+" UTC";'
+    'for(const _n of document.querySelectorAll("[data-kit-cost]"))'
+    '{_n.textContent=window.__kitCostText;_n.title=window.__kitCostTitle}'
+    '}catch{}};'
+    'window.__kitCostTimer=setInterval(_p,6e4);_p()}})})}),'
+)
+SETTINGS = re.compile(r'(s\.jsx\("div",\{className:"hidden px-2 py-1\.5 md:block",'
+                      r'children:s\.jsxs\("button",\{className:"flex w-full items-'
+                      r'center gap-2 rounded-lg px-2\.5 py-1\.5 text-muted-foreground '
+                      r'transition-colors hover:bg-accent/60 hover:text-foreground",'
+                      r'onClick:(\w+),)')
+if len(SETTINGS.findall(s)) == 1 and not re.search(r'\b__kitCost\w*\b', s):
+    s = SETTINGS.sub(COST_CHIP + r'\1', s, count=1)
+    applied.append('cost chip')
+else:
+    missing.append('cost chip (%d matches)' % len(SETTINGS.findall(s)))
+
 open(out, 'w').write(s)
 for m in missing:
     print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)

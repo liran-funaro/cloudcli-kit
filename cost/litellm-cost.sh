@@ -403,10 +403,33 @@ render() {
   printf 'which survives key rotation; cycle counters are what enforce a cap.</footer>\n'
 }
 
+# A handful of numbers beside the page, for the always-visible chip in the
+# sidebar: it wants today's figure sixty seconds fresh and nothing else, and
+# parsing a report to find one number would tie the chip to the report's markup.
+# Written only when the query succeeded -- a chip with no number says "—", which
+# is honest, whereas a chip showing a zero would not be.
+write_json() {
+  local out="${OUT%.html}.json"
+  [[ $out == "$OUT" ]] && out="$OUT.json"
+  out="${CLOUDCLI_COST_JSON:-$out}"
+  jq -n --arg gen "$NOW" --arg today "$TODAY" --arg d7 "$D7" --arg d30 "$D30" \
+        --arg start "$START" --slurpfile day "$TMP/day.json" "$JQ_LIB"'
+    ($day[0].results // []) as $r
+    | { generated: $gen,
+        window: {start: $start, end: $today},
+        today:    (($r | map(select(.date == $today)) | sum(.metrics.spend)) | d2),
+        last7:    (($r | map(select(.date >= $d7))    | sum(.metrics.spend)) | d2),
+        last30:   (($r | map(select(.date >= $d30))   | sum(.metrics.spend)) | d2),
+        lifetime: (($day[0].metadata.total_spend // 0) | d2) }
+  ' >"$TMP/out.json" || return 1
+  install -m 640 "$TMP/out.json" "$out"
+}
+
 # Written whole or not at all: the tab fetches this file on a timer of its own,
 # and half a page is worse than a stale one.
 mkdir -p "$(dirname "$OUT")" 2>/dev/null
 render >"$TMP/out.html" || { echo "error: render failed" >&2; exit 1; }
 install -m 640 "$TMP/out.html" "$OUT" || { echo "error: cannot write $OUT" >&2; exit 1; }
+[[ -z $FAIL ]] && { write_json || echo "warning: could not write the json sidecar" >&2; }
 [[ -n $FAIL ]] && { echo "wrote $OUT with an error notice: $FAIL" >&2; exit 1; }
 echo "wrote $OUT"

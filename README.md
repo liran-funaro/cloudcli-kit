@@ -34,16 +34,18 @@ a tab, and structurally wrong for the rest:
   eye. That is a filesystem job, not a browser job.
 - **The model options live in the server's own module.** Dropping one, or giving one a
   description worth reading, is an edit to a file on disk. No plugin surface reaches it.
-- **Six of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
+- **Seven of the tweaks are inside the app bundle.** The sidebar's Projects/Conversations
   switch is React state; the model menu never passes the description to the menu component
   that would render it; a Conversations row is drawn without the activity, the spinner or the
   menu its sibling rows have, and nothing refetches that list when one of those actions
   changes something; the composer's command menu is assembled from three sources, none of
-  which is the CLI's own commands; and the Enter key sends by default. None of the first five
-  is reachable from CSS, and a plugin runs too late and in the wrong scope to change any of
-  them — the very rows and menus it would have to reach are rendered and gone before its
-  module is fetched. The sixth *is* stored in the browser, but a plugin could only overwrite
-  the value you chose — the bundle edit changes the default and leaves your choice alone.
+  which is the CLI's own commands; the sidebar footer has no row for what the proxy has billed
+  today; and the Enter key sends by default. None of the first six is reachable from CSS, and
+  a plugin runs too late and in the wrong scope to change any of them — the very rows and menus
+  it would have to reach are rendered and gone before its module is fetched, and the footer is
+  not a tab, so a plugin cannot put anything in it at all. The seventh *is* stored in the
+  browser, but a plugin could only overwrite the value you chose — the bundle edit changes the
+  default and leaves your choice alone.
 
 So it is one stylesheet, a launcher, and one tab. The upside of doing it this way rather than forking
 CloudCLI: nothing here lives in a file upstream also edits, so there is never a merge —
@@ -90,10 +92,11 @@ The launcher un-seeds what its earlier floating-pill version left behind, and `i
 reports a still-installed plugin directory rather than deleting it: that is a clone with a
 switch beside it in Settings → Plugins, and removing either is yours to do.
 
-## Six small edits in the bundle
+## Seven small edits in the bundle
 
 Three are things the app already almost does; one is a default worth flipping; one is a
-list keeping itself current; one is a menu that never listed what the CLI can do:
+list keeping itself current; one is a menu that never listed what the CLI can do; one puts a
+number on the page that was only ever a command away:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
   never persisted, so it reset to Projects on every load.
@@ -148,6 +151,21 @@ list keeping itself current; one is a menu that never listed what the CLI can do
   every run, and reading *that* is the honest fix: the server drops the frame before the
   browser sees it, and a patched server module would only land on the next restart. That one
   belongs upstream.
+- **Today's spend, permanently in the sidebar footer.** The [Cost tab](#the-cost-tab) is the
+  whole report; this is the one number worth seeing without going to look for it, in a row of
+  exactly the shape the footer already stacks, above Settings. It reads the json sidecar
+  `cloudcli-cost` writes beside the report — one number, rather than a page whose markup the
+  chip would then depend on — and refreshes every 60s. No key reaches the browser: the file is
+  already on disk, written by something that had one.
+
+  React state would be the obvious way to hold that number and the obvious way to get it wrong
+  from a substitution: hooks must be declared unconditionally and in order, inside a component
+  whose minified name is a guess away from being wrong. A `ref` callback needs none of that.
+  React hands it the node on mount and `null` on unmount, so the first mount starts one
+  interval for the page's lifetime — guarded, so re-mounting the sidebar cannot start a second
+  — and every later render re-fills the node from what was already fetched, which is why the
+  number survives a re-render instead of blinking back to a dash. With no report on disk it
+  reads `today —`, and says why in its tooltip.
 - **Enter for a newline, ⌘/Ctrl+Enter to send.** This one the app does have a setting for —
   Quick Settings (the tab on the right edge of the window) → Input Settings → *Send by
   Ctrl+Enter* — it just defaults off, so every browser starts out sending on Enter. The patch
@@ -174,12 +192,12 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 7/7 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, conversation row, conversation refresh, cli commands
+frontend: 8/8 applied -- sidebar default, model description, ctrl+enter to send,
+send while running, conversation row, conversation refresh, cli commands, cost chip
 ```
 
-Seven because one of them, *send while running*, belongs to steering — described with it
-below. `CLOUDCLI_STEER=0` leaves it out and the run prints `6/6`.
+Eight because one of them, *send while running*, belongs to steering — described with it
+below. `CLOUDCLI_STEER=0` leaves it out and the run prints `7/7`.
 
 Several are read from more than one anchor: the conversation row alone borrows twelve names
 the minifier chose — the classname helper and button variants that give a session row its
@@ -305,9 +323,10 @@ Three pieces, each doing only its own job:
 
 | | |
 |---|---|
-| `~/bin/cloudcli-cost` | queries the proxy, writes `dist/cost.html`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in the page |
+| `~/bin/cloudcli-cost` | queries the proxy, writes `dist/cost.html` and `dist/cost.json`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in what it writes |
 | the **Cost** tab | a plugin that frames that page, says how old it is, and reloads it every 60s |
-| `cloudcli-cost.timer` | rewrites the report every 5 minutes |
+| the sidebar chip | today's figure, permanently above Settings — a bundle edit, described with the others below |
+| `cloudcli-cost.timer` | rewrites both files every 5 minutes |
 
 The launcher writes a report at every start too, so the tab has something from the
 first reload — best-effort by construction, since a package upgrade wipes `dist/`
