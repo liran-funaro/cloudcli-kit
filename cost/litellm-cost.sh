@@ -445,23 +445,54 @@ render() {
   ' "$TMP/day.json" | table --no-head
   end_section
 
-  section 'Your keys — counters, which is what a cap is enforced against'
+  # One table, two sources. The cap and what is left of it can only come from a
+  # key's counter; today and the week can only come from the ledger, which is
+  # also the only place a key rotated mid-cycle still appears -- and such a key
+  # has no counter left, so its cycle figure is the ledger's and its cap columns
+  # are blank. Where both exist the counter wins, because that is the figure the
+  # proxy enforces.
+  section 'Your keys — this cycle'
   printf '<div class="scroll">\n'
-  jq -r "$JQ_LIB"'
-    ["KEY", "ALIAS", "SPEND", "CAP", "USED", "LEFT", "RESETS"],
-    ( (.keys // [])
-      | sort_by(-(.spend // 0))[]
-      | (.spend // 0) as $s | (.max_budget // null) as $m
-      | [ (.token // "?")[0:8] + "…",
-          (.key_alias // "(no alias)"),
-          "$" + ($s | d2),
-          (if $m then "$" + ($m | d2) else "—" end),
-          (if $m and $m > 0 then (($s / $m) | pct | tostring) + "%" else "—" end),
-          (if $m then "$" + (($m - $s) | d2) else "—" end),
-          ((.budget_reset_at // "—") | tostring | .[0:10])
-        ] )
+  jq -r --arg today "$TODAY" --arg d7 "$D7" --arg cstart "${CYCLE_START:-1970-01-01}" \
+        --slurpfile kl "$TMP/keys.json" "$JQ_LIB"'
+    (($kl[0].keys // []) | map({key: .token, value: .}) | from_entries) as $live
+    | [ .results[]? as $d
+        | select($d.date >= $cstart)
+        | ($d.breakdown.api_keys // {} | to_entries[]
+           | {k: .key, s: (.value.metrics.spend // 0), d: $d.date}) ]
+    | group_by(.k)
+    | map({ k: .[0].k, led: sum(.s),
+            t: (map(select(.d == $today)) | sum(.s)),
+            w: (map(select(.d >= $d7)) | sum(.s)) })
+    | (map({key: .k, value: .}) | from_entries) as $ledger
+    # Every key with a counter, plus every key the ledger billed this cycle --
+    # so a rotated one is not lost and a brand-new one is not waiting on the
+    # ledger to catch up.
+    | (($live | keys) + ($ledger | keys | map(select($ledger[.].led > 0.005))) | unique)
+    | map(. as $k
+          | ($live[$k] // null) as $c
+          | ($ledger[$k] // {led: 0, t: 0, w: 0}) as $l
+          | { k: $k,
+              alias: (($c.key_alias) // "(rotated out / deleted)"),
+              spend: (if $c then ($c.spend // 0) else $l.led end),
+              counted: ($c != null),
+              cap: (if $c then ($c.max_budget // null) else null end),
+              resets: (if $c then (($c.budget_reset_at // null)) else null end),
+              t: $l.t, w: $l.w })
+    | ( ["KEY", "ALIAS", "CYCLE", "CAP", "USED", "LEFT", "TODAY", "7 DAYS", "RESETS"],
+        ( sort_by(-.spend)[]
+          | .cap as $m | .spend as $s
+          | [ .k[0:8] + "…",
+              .alias + (if .counted then "" else " · ledger" end),
+              "$" + ($s | d2),
+              (if $m then "$" + ($m | d2) else "—" end),
+              (if $m and $m > 0 then (($s / $m) | pct | tostring) + "%" else "—" end),
+              (if $m then "$" + (($m - $s) | d2) else "—" end),
+              (if .t > 0.005 then "$" + (.t | d2) else "—" end),
+              (if .w > 0.005 then "$" + (.w | d2) else "—" end),
+              ((.resets // "—") | tostring | .[0:10]) ] ) )
     | @tsv
-  ' "$TMP/keys.json" | table
+  ' "$TMP/day.json" | table
   printf '</div>\n'
 
   # Any key close to its cap is the thing that will actually break.
@@ -479,36 +510,11 @@ render() {
     while IFS= read -r w; do [[ -n $w ]] && printf '<li>%s</li>\n' "$w"; done <<<"$warns"
     printf '</ul>\n'
   fi
-  end_section
-
-  # Same cycle, from the ledger — which is where a key you rotated mid-cycle
-  # still appears, and a counter no longer does.
-  section 'Keys — this cycle in the ledger, rotated ones included'
-  printf '<div class="scroll">\n'
-  jq -r --arg today "$TODAY" --arg d7 "$D7" --arg cstart "${CYCLE_START:-1970-01-01}" \
-        --slurpfile kl "$TMP/keys.json" "$JQ_LIB"'
-    (reduce (($kl[0].keys // [])[]) as $k ({}; .[$k.token] = ($k.key_alias // "(no alias)"))) as $alias
-    | [ .results[]? as $d
-        | select($d.date >= $cstart)
-        | ($d.breakdown.api_keys // {} | to_entries[]
-           | {k: .key, s: (.value.metrics.spend // 0), d: $d.date}) ]
-    | group_by(.k)
-    | map({k: .[0].k, s: sum(.s),
-           t: (map(select(.d == $today)) | sum(.s)),
-           w: (map(select(.d >= $d7)) | sum(.s)),
-           last: (map(.d) | max)})
-    | map(select(.s > 0.005))
-    | ( ["KEY", "ALIAS", "CYCLE", "TODAY", "7 DAYS", "LAST"],
-        ( sort_by(-.s)[]
-          | [ .k[0:8] + "…",
-              ($alias[.k] // "(rotated out / deleted)"),
-              "$" + (.s | d2),
-              (if .t > 0.005 then "$" + (.t | d2) else "—" end),
-              (if .w > 0.005 then "$" + (.w | d2) else "—" end),
-              .last ] ) )
-    | @tsv
-  ' "$TMP/day.json" | table
-  printf '</div>\n'
+  printf '<p class="note">Cycle, cap and what is left are the key&#39;s own counter; '
+  printf 'today and the week are the ledger&#39;s, which is the only source with a '
+  printf 'day in it. A row marked <b>· ledger</b> has no counter to read — the key '
+  printf 'was rotated or deleted inside this cycle — so its cycle figure is the '
+  printf 'ledger&#39;s sum and it has no cap left to run into.</p>\n'
   end_section
 
   section 'By model — this cycle'

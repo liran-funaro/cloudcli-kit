@@ -315,8 +315,8 @@ carries [`cost/litellm-cost.sh`](cost/litellm-cost.sh) — the terminal dashboar
 standalone HTML page instead of columns — and arranged around the **budget cycle**,
 which is the thing being tracked. Where the cycle stands against its cap for your
 keys and for the team, with the burn rate and where that lands by reset; then today,
-yesterday and the week; then per key and per member within the cycle, by model, and
-the token and cache figures. A month-by-month table stays for trend, and that is the
+yesterday and the week; then one table per key and one per member within the cycle, by
+model, and the token and cache figures. A month-by-month table stays for trend, and that is the
 only place a total appears.
 
 Two figures describe a cycle and they do not agree, which the page says rather than
@@ -333,6 +333,12 @@ says which it is reading.
 The cycle window itself is derived from the API: `budget_reset_at` minus
 `budget_duration`, taken from the team when it has a budget and from your keys
 otherwise.
+
+Your keys are **one** table joining both sources rather than two side by side: cap and
+what is left of it can only come from a counter, today and the week can only come from
+the ledger, and where both have a cycle figure the counter wins because that is what
+the proxy enforces. A key rotated or deleted inside the cycle has no counter left, so
+it is marked `· ledger`, keeps its ledger figure, and shows no cap to run into.
 
 **This is the one part of the kit that must never go upstream.** A LiteLLM ledger
 is not something CloudCLI knows or should know about, which is also why the report
