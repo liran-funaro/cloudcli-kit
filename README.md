@@ -151,8 +151,10 @@ number on the page that was only ever a command away:
   every run, and reading *that* is the honest fix: the server drops the frame before the
   browser sees it, and a patched server module would only land on the next restart. That one
   belongs upstream.
-- **Today's spend, permanently in the sidebar footer.** The [Cost tab](#the-cost-tab) is the
-  whole report; this is the one number worth seeing without going to look for it, in a row of
+- **Today's spend and the cycle, permanently in the sidebar footer.** The [Cost
+  tab](#the-cost-tab) is the whole report; this is what is worth seeing without going to look
+  for it — `today $257.68 · cycle 37.5%`, with the cap, the reset date and the team's figure in
+  its tooltip — in a row of
   exactly the shape the footer already stacks, above Settings. It reads the json sidecar
   `cloudcli-cost` writes beside the report — one number, rather than a page whose markup the
   chip would then depend on — and refreshes every 60s. No key reaches the browser: the file is
@@ -310,10 +312,27 @@ A LiteLLM proxy bills per token, and nothing in CloudCLI knows that. So the kit
 carries [`cost/litellm-cost.sh`](cost/litellm-cost.sh) — the terminal dashboard
 `litellm-spend.sh` with the terminal taken out: the same three queries against
 `/user/info`, `/key/list` and `/user/daily/activity`, the same jq, rendering one
-standalone HTML page instead of columns. Lifetime spend from the ledger, every key
-against its cap, lifetime per key *including rotated and deleted ones*, then by
-model, by month, the token and cache figures behind it — and the team's keys, which
-the terminal version never showed.
+standalone HTML page instead of columns — and arranged around the **budget cycle**,
+which is the thing being tracked. Where the cycle stands against its cap for your
+keys and for the team, with the burn rate and where that lands by reset; then today,
+yesterday and the week; then per key and per member within the cycle, by model, and
+the token and cache figures. A month-by-month table stays for trend, and that is the
+only place a total appears.
+
+Two figures describe a cycle and they do not agree, which the page says rather than
+hides. The **counters** — a key's `spend`, a team's `spend` — are live, per request,
+and are what a cap is enforced against: those are the budget. The **ledger**
+(`/user/daily/activity`, `/team/daily/activity`) aggregates per UTC day and is the
+only source for a per-day or per-member figure. Summing the ledger from the cycle's
+start lands a few percent under the counter, and no boundary reconciles them — tested
+across a week of candidate start dates, where my own sum was identical for three
+consecutive starts while the counter sat $58 above all of them. So counters answer
+*how much of the budget is gone*, the ledger answers *where it went*, and each table
+says which it is reading.
+
+The cycle window itself is derived from the API: `budget_reset_at` minus
+`budget_duration`, taken from the team when it has a budget and from your keys
+otherwise.
 
 **This is the one part of the kit that must never go upstream.** A LiteLLM ledger
 is not something CloudCLI knows or should know about, which is also why the report
@@ -347,7 +366,7 @@ Three pieces, each doing only its own job:
 |---|---|
 | `~/bin/cloudcli-cost` | queries the proxy (five endpoints; the two team ones are optional), writes `dist/cost.html` and `dist/cost.json`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in what it writes |
 | the **Cost** tab | a plugin that frames that page, says how old it is, and reloads it every 60s |
-| the sidebar chip | today's figure, permanently above Settings — a bundle edit, described with the others below |
+| the sidebar chip | today's figure and how much of the cycle is gone, permanently above Settings — a bundle edit, described with the others below |
 | `cloudcli-cost.timer` | rewrites both files every 5 minutes |
 
 The launcher writes a report at every start too, so the tab has something from the

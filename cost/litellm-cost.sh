@@ -304,6 +304,47 @@ for f in user keys day; do
 done
 [[ -n $BASE ]] || FAIL="set LITELLM_BASE_URL or ANTHROPIC_BASE_URL"
 
+# ---------------------------------------------------------------- the cycle
+#
+# The budget cycle is the thing being tracked, so the report is arranged around
+# it. Two figures describe it and they do not agree, which is worth stating once
+# rather than papering over:
+#
+#   * the COUNTERS -- a key's `spend`, a team's `spend` -- are live, per request,
+#     and are what the proxy enforces a cap against. These are the budget.
+#   * the LEDGER -- /user/daily/activity, /team/daily/activity -- is aggregated
+#     per UTC day, and is the only source for per-day or per-member figures.
+#
+# Summing the ledger from the cycle's start lands a few percent under the
+# counter (batching, and requests the daily table does not count), and no choice
+# of start date reconciles them -- checked across a week of candidate boundaries.
+# So counters answer "how much of the budget is gone" and the ledger answers
+# "where did it go", and each is labelled with which it is.
+RESET_AT="$(jq -r '[(.team_info // .).budget_reset_at // empty] | first // empty' "$TMP/team.json" 2>/dev/null)"
+CYCLE_DUR="$(jq -r '[(.team_info // .).budget_duration // empty] | first // empty' "$TMP/team.json" 2>/dev/null)"
+# No team, or a team without a budget: fall back to whatever your own keys say.
+[[ -n $RESET_AT ]] || RESET_AT="$(jq -r '[(.keys // [])[] | .budget_reset_at // empty] | max // empty' "$TMP/keys.json" 2>/dev/null)"
+[[ -n $CYCLE_DUR ]] || CYCLE_DUR="$(jq -r '[(.keys // [])[] | .budget_duration // empty] | first // empty' "$TMP/keys.json" 2>/dev/null)"
+
+CYCLE_START=""; CYCLE_END="${RESET_AT:0:10}"; CYCLE_DAYS=""; DAYS_IN=""; DAYS_LEFT=""
+if [[ -n $CYCLE_END ]]; then
+  # LiteLLM durations are "30d", "1mo", "24h", "60s"; only the coarse ones can
+  # bound a day-grained window, and anything else leaves the window unstated.
+  case "$CYCLE_DUR" in
+    *mo) CYCLE_START="$(date -u -d "$CYCLE_END -${CYCLE_DUR%mo} month" +%F 2>/dev/null)" ;;
+    *w)  CYCLE_START="$(date -u -d "$CYCLE_END -$((${CYCLE_DUR%w} * 7)) days" +%F 2>/dev/null)" ;;
+    *d)  CYCLE_START="$(date -u -d "$CYCLE_END -${CYCLE_DUR%d} days" +%F 2>/dev/null)" ;;
+  esac
+fi
+if [[ -n $CYCLE_START ]]; then
+  CYCLE_DAYS=$(( ($(date -u -d "$CYCLE_END" +%s) - $(date -u -d "$CYCLE_START" +%s)) / 86400 ))
+  DAYS_IN=$(( ($(date -u -d "$TODAY" +%s) - $(date -u -d "$CYCLE_START" +%s)) / 86400 + 1 ))
+  DAYS_LEFT=$(( ($(date -u -d "$CYCLE_END" +%s) - $(date -u -d "$TODAY" +%s)) / 86400 ))
+  (( DAYS_IN < 1 )) && DAYS_IN=1
+  (( DAYS_LEFT < 0 )) && DAYS_LEFT=0
+fi
+D1="$(date -u -d '1 day ago' +%F)"
+
 # ---------------------------------------------------------------- render
 
 render() {
@@ -312,7 +353,11 @@ render() {
   printf '<div class="sub">%s · generated <b>%s UTC</b>' \
     "$(printf '%s' "${BASE#https://}" | esc)" "$NOW"
   if [[ -z $FAIL ]]; then
-    printf ' · ledger window %s → %s' "$START" "$TODAY"
+    if [[ -n $CYCLE_START ]]; then
+      printf ' · cycle <b>%s → %s</b>, %s day%s left' \
+        "$CYCLE_START" "$CYCLE_END" "$DAYS_LEFT" "$([[ $DAYS_LEFT == 1 ]] || printf s)"
+    fi
+    printf ' · ledger read from %s' "$START"
   fi
   printf '</div>\n</header>\n'
 
@@ -326,27 +371,81 @@ render() {
   section 'Account'
   jq -r "$JQ_LIB"'
     ["account", (.user_info.user_email // "?")],
-    ["role", (.user_info.user_role // "?")],
-    ["cycle counter", "$" + ((.user_info.spend // 0) | d2)]
+    ["role", (.user_info.user_role // "?")]
     | @tsv
   ' "$TMP/user.json" | table --no-head
   end_section
 
-  section 'Totals'
-  jq -r --arg today "$TODAY" --arg d7 "$D7" --arg d30 "$D30" "$JQ_LIB"'
+  # ---- the budget, which is what the counters measure
+  section 'Budget — this cycle'
+  {
+    if [[ -n $CYCLE_START ]]; then
+      printf 'cycle\t%s → %s\t%s of %s days, %s left\n' \
+        "$CYCLE_START" "$CYCLE_END" "$DAYS_IN" "$CYCLE_DAYS" "$DAYS_LEFT"
+    elif [[ -n $CYCLE_END ]]; then
+      printf 'cycle\tresets %s\tduration %s\n' "$CYCLE_END" "${CYCLE_DUR:-unknown}"
+    fi
+    # Your keys, then the team, each against its own cap. Burn is the counter
+    # over the days elapsed, and the projection carries that rate to the reset
+    # -- which is the number that says whether the cap will hold.
+    jq -r --argjson days_in "${DAYS_IN:-0}" --argjson days_left "${DAYS_LEFT:-0}" "$JQ_LIB"'
+      ((.keys // []) | map(.spend // 0) | add // 0) as $s
+      | ((.keys // []) | map(.max_budget // 0) | add // 0) as $m
+      | [ ["your keys", "$" + ($s | d2)
+             + (if $m > 0 then " of $" + ($m | d2) + " (" + ($s / $m | pct | tostring)
+                               + "%, $" + (($m - $s) | d2) + " left)" else "" end),
+           (if $days_in > 0
+            then "$" + (($s / $days_in) | d2) + "/day"
+                 + (if $days_left > 0
+                    then " → $" + (($s + ($s / $days_in) * $days_left) | d2) + " by reset"
+                    else "" end)
+            else "" end)] ]
+      | .[] | @tsv
+    ' "$TMP/keys.json"
+    if [[ -s $TMP/team.json ]]; then
+      jq -r --argjson days_in "${DAYS_IN:-0}" --argjson days_left "${DAYS_LEFT:-0}" "$JQ_LIB"'
+        (.team_info // .) as $t
+        | ($t.spend // 0) as $s | ($t.max_budget // 0) as $m
+        | [ ["team " + ($t.team_alias // "?"), "$" + ($s | d2)
+               + (if $m > 0 then " of $" + ($m | d2) + " (" + ($s / $m | pct | tostring)
+                                 + "%, $" + (($m - $s) | d2) + " left)" else "" end),
+             (if $days_in > 0
+              then "$" + (($s / $days_in) | d2) + "/day"
+                   + (if $days_left > 0
+                      then " → $" + (($s + ($s / $days_in) * $days_left) | d2) + " by reset"
+                      else "" end)
+              else "" end)] ]
+        | .[] | @tsv
+      ' "$TMP/team.json"
+    fi
+  } | table --no-head
+  printf '<p class="note">These are the proxy&#39;s live counters — what a cap is '
+  printf 'enforced against, and what resets on the date above. Everything below '
+  printf 'comes from the daily ledger instead, which is the only source for a '
+  printf 'per-day or per-member figure and runs a few percent under a counter: it '
+  printf 'aggregates per UTC day, so the two never agree to the cent.</p>\n'
+  end_section
+
+  # ---- day and week, the rhythm rather than the total
+  section 'Recent — you'
+  jq -r --arg today "$TODAY" --arg d1 "$D1" --arg d7 "$D7" \
+        --argjson days_in "${DAYS_IN:-0}" --arg cstart "${CYCLE_START:-}" "$JQ_LIB"'
     (.results // []) as $r
-    | (.metadata.total_spend // 0) as $life
-    | [ ["lifetime (ledger)", "$" + ($life | d2), "since first activity in window"],
-        ["today",             "$" + (($r | map(select(.date == $today)) | sum(.metrics.spend)) | d2), $today],
-        ["last 7 days",       "$" + (($r | map(select(.date >= $d7))    | sum(.metrics.spend)) | d2),
-                              "$" + ((($r | map(select(.date >= $d7))   | sum(.metrics.spend)) / 7)  | d2) + "/day"],
-        ["last 30 days",      "$" + (($r | map(select(.date >= $d30))   | sum(.metrics.spend)) | d2),
-                              "$" + ((($r | map(select(.date >= $d30))  | sum(.metrics.spend)) / 30) | d2) + "/day"]
-      ][] | @tsv
+    | [ ["today",      "$" + (($r | map(select(.date == $today)) | sum(.metrics.spend)) | d2), $today],
+        ["yesterday",  "$" + (($r | map(select(.date == $d1))    | sum(.metrics.spend)) | d2), $d1],
+        ["last 7 days","$" + (($r | map(select(.date >= $d7))    | sum(.metrics.spend)) | d2),
+                       "$" + ((($r | map(select(.date >= $d7))   | sum(.metrics.spend)) / 7) | d2) + "/day"] ]
+      + (if $cstart != "" and $days_in > 0
+         then [ ["this cycle (ledger)",
+                 "$" + (($r | map(select(.date >= $cstart)) | sum(.metrics.spend)) | d2),
+                 "$" + ((($r | map(select(.date >= $cstart)) | sum(.metrics.spend)) / $days_in) | d2)
+                   + "/day since " + $cstart ] ]
+         else [] end)
+    | .[] | @tsv
   ' "$TMP/day.json" | table --no-head
   end_section
 
-  section 'Keys — budget cycle counters'
+  section 'Your keys — counters, which is what a cap is enforced against'
   printf '<div class="scroll">\n'
   jq -r "$JQ_LIB"'
     ["KEY", "ALIAS", "SPEND", "CAP", "USED", "LEFT", "RESETS"],
@@ -382,31 +481,40 @@ render() {
   fi
   end_section
 
-  section 'Keys — lifetime spend (ledger, survives rotation)'
+  # Same cycle, from the ledger — which is where a key you rotated mid-cycle
+  # still appears, and a counter no longer does.
+  section 'Keys — this cycle in the ledger, rotated ones included'
   printf '<div class="scroll">\n'
-  jq -r --slurpfile kl "$TMP/keys.json" "$JQ_LIB"'
+  jq -r --arg today "$TODAY" --arg d7 "$D7" --arg cstart "${CYCLE_START:-1970-01-01}" \
+        --slurpfile kl "$TMP/keys.json" "$JQ_LIB"'
     (reduce (($kl[0].keys // [])[]) as $k ({}; .[$k.token] = ($k.key_alias // "(no alias)"))) as $alias
     | [ .results[]? as $d
+        | select($d.date >= $cstart)
         | ($d.breakdown.api_keys // {} | to_entries[]
            | {k: .key, s: (.value.metrics.spend // 0), d: $d.date}) ]
     | group_by(.k)
-    | map({k: .[0].k, s: sum(.s), first: (map(.d) | min), last: (map(.d) | max)})
-    | (map(select(.s <= 0.005)) | length) as $zero
-    | (map(select(.s > 0.005)) | sort_by(-.s)) as $paid
-    | ( ["KEY", "ALIAS", "SPEND", "FIRST", "LAST"],
-        ($paid[] | [ .k[0:8] + "…",
-                     ($alias[.k] // "(rotated out / deleted)"),
-                     "$" + (.s | d2), .first, .last ]),
-        (if $zero > 0 then ["", "+ " + ($zero | tostring) + " keys with $0.00", "", "", ""] else empty end) )
+    | map({k: .[0].k, s: sum(.s),
+           t: (map(select(.d == $today)) | sum(.s)),
+           w: (map(select(.d >= $d7)) | sum(.s)),
+           last: (map(.d) | max)})
+    | map(select(.s > 0.005))
+    | ( ["KEY", "ALIAS", "CYCLE", "TODAY", "7 DAYS", "LAST"],
+        ( sort_by(-.s)[]
+          | [ .k[0:8] + "…",
+              ($alias[.k] // "(rotated out / deleted)"),
+              "$" + (.s | d2),
+              (if .t > 0.005 then "$" + (.t | d2) else "—" end),
+              (if .w > 0.005 then "$" + (.w | d2) else "—" end),
+              .last ] ) )
     | @tsv
   ' "$TMP/day.json" | table
   printf '</div>\n'
   end_section
 
-  section 'By model'
+  section 'By model — this cycle'
   printf '<div class="scroll">\n'
-  jq -r "$JQ_LIB"'
-    [ .results[]?.breakdown.models // {} | to_entries[] ]
+  jq -r --arg cstart "${CYCLE_START:-1970-01-01}" "$JQ_LIB"'
+    [ .results[]? | select(.date >= $cstart) | .breakdown.models // {} | to_entries[] ]
     | group_by(.key)
     | map({m: .[0].key,
            s: sum(.value.metrics.spend // 0),
@@ -443,9 +551,16 @@ render() {
   printf '</div>\n'
   end_section
 
-  section 'Tokens and reliability'
-  jq -r "$JQ_LIB"'
-    .metadata as $m
+  section 'Tokens and reliability — this cycle'
+  jq -r --arg cstart "${CYCLE_START:-1970-01-01}" "$JQ_LIB"'
+    ([ .results[]? | select(.date >= $cstart) | .metrics ]) as $days
+    | { total_tokens: ($days | sum(.total_tokens // 0)),
+        total_prompt_tokens: ($days | sum(.prompt_tokens // 0)),
+        total_completion_tokens: ($days | sum(.completion_tokens // 0)),
+        total_cache_read_input_tokens: ($days | sum(.cache_read_input_tokens // 0)),
+        total_cache_creation_input_tokens: ($days | sum(.cache_creation_input_tokens // 0)),
+        total_api_requests: ($days | sum(.api_requests // 0)),
+        total_failed_requests: ($days | sum(.failed_requests // 0)) } as $m
     | ($m.total_prompt_tokens // 0) as $p
     | ($m.total_api_requests // 0) as $req
     | [ ["total tokens",   ($m.total_tokens // 0 | h), ""],
@@ -463,7 +578,7 @@ render() {
 
   # ---- the team, for reference
   if [[ -s $TMP/teamday.json && -s $TMP/team.json ]]; then
-    section 'Team — spend per member, every key billing against it'
+    section 'Team — this cycle, per member'
     jq -r --slurpfile td "$TMP/teamday.json" "$JQ_LIB"'
       (.team_info // .) as $t
       | [ ["team", ($t.team_alias // $t.team_id // "?")],
@@ -474,7 +589,7 @@ render() {
                      + " (" + (($t.spend // 0) / $t.max_budget | pct | tostring) + "%, $"
                      + (($t.max_budget - ($t.spend // 0)) | d2) + " left)"
                 else "" end)],
-          ["window (ledger)", "$" + (($td[0].metadata.total_spend // 0) | d2)]
+          ["resets", ($t.budget_reset_at // "—" | tostring | .[0:10])]
         ][] | @tsv
     ' "$TMP/team.json" | table --no-head
 
@@ -485,7 +600,8 @@ render() {
     # or that part's first dot-segment, and only when exactly one member matches.
     # An alias nothing matches stays its own row, which is why the member column
     # is an email when it is a person and an alias when it is a guess declined.
-    jq -r --arg today "$TODAY" --slurpfile mine "$TMP/keys.json" \
+    jq -r --arg today "$TODAY" --arg d7 "$D7" --arg cstart "${CYCLE_START:-1970-01-01}" \
+          --slurpfile mine "$TMP/keys.json" \
           --slurpfile ti "$TMP/team.json" "$JQ_LIB"'
       def norm: ascii_downcase | split("-")[0] | split("_")[0] | gsub("^ +| +$"; "");
       def loc($e): $e | ascii_downcase | split("@")[0];
@@ -498,6 +614,7 @@ render() {
         | [ ($t.members_with_roles // $t.members // [])[] | .user_email // empty ]) as $emails
       | ([ ($mine[0].keys // [])[] | .token ]) as $own
       | [ .results[]? as $d
+          | select($d.date >= $cstart)
           | ($d.breakdown.api_keys // {} | to_entries[]
              | {k: .key, s: (.value.metrics.spend // 0), r: (.value.metrics.api_requests // 0),
                 a: (.value.metadata.key_alias // null), d: $d.date}) ]
@@ -506,6 +623,7 @@ render() {
               a: ((map(.a) | map(select(. != null)) | first) // "(no alias)"),
               s: sum(.s), r: sum(.r),
               t: (map(select(.d == $today)) | sum(.s)),
+              w: (map(select(.d >= $d7)) | sum(.s)),
               last: (map(.d) | max) })
       | map(select(.s > 0.005 or .r > 0))
       | map(. as $row
@@ -517,10 +635,10 @@ render() {
               matched: .[0].matched,
               aliases: (map(.a) | unique),
               n: length,
-              s: sum(.s), t: sum(.t), r: sum(.r),
+              s: sum(.s), t: sum(.t), w: sum(.w), r: sum(.r),
               last: (map(.last) | max),
               mine: (map(.mine) | any) })
-      | ( ["MEMBER", "KEYS", "SPEND", "TODAY", "REQUESTS", "LAST"],
+      | ( ["MEMBER", "KEYS", "CYCLE", "TODAY", "7 DAYS", "LAST"],
           ( sort_by(-.s)[]
             | [ .who + (if .mine then " · yours" else "" end),
                 ((if .n > 1 then (.n | tostring) + " · " else "" end)
@@ -529,7 +647,8 @@ render() {
                     then " +" + (((.aliases | length) - 4) | tostring) else "" end)),
                 "$" + (.s | d2),
                 (if .t > 0.005 then "$" + (.t | d2) else "—" end),
-                (.r | tostring), .last ] ) )
+                (if .w > 0.005 then "$" + (.w | d2) else "—" end),
+                .last ] ) )
       | @tsv
     ' "$TMP/teamday.json" | table
     printf '</div>\n'
@@ -562,15 +681,32 @@ write_json() {
   local out="${OUT%.html}.json"
   [[ $out == "$OUT" ]] && out="$OUT.json"
   out="${CLOUDCLI_COST_JSON:-$out}"
-  jq -n --arg gen "$NOW" --arg today "$TODAY" --arg d7 "$D7" --arg d30 "$D30" \
-        --arg start "$START" --slurpfile day "$TMP/day.json" "$JQ_LIB"'
+  jq -n --arg gen "$NOW" --arg today "$TODAY" --arg d7 "$D7" \
+        --arg cstart "${CYCLE_START:-}" --arg creset "${CYCLE_END:-}" \
+        --argjson dleft "${DAYS_LEFT:-0}" \
+        --slurpfile day "$TMP/day.json" --slurpfile keys "$TMP/keys.json" \
+        --slurpfile team "$TMP/team.json" "$JQ_LIB"'
     ($day[0].results // []) as $r
+    | (($keys[0].keys // []) | map(.spend // 0) | add // 0) as $ks
+    | (($keys[0].keys // []) | map(.max_budget // 0) | add // 0) as $kc
+    | (($team | first | (.team_info // .)) // {}) as $t
     | { generated: $gen,
-        window: {start: $start, end: $today},
-        today:    (($r | map(select(.date == $today)) | sum(.metrics.spend)) | d2),
-        last7:    (($r | map(select(.date >= $d7))    | sum(.metrics.spend)) | d2),
-        last30:   (($r | map(select(.date >= $d30))   | sum(.metrics.spend)) | d2),
-        lifetime: (($day[0].metadata.total_spend // 0) | d2) }
+        today:  (($r | map(select(.date == $today)) | sum(.metrics.spend)) | d2),
+        last7:  (($r | map(select(.date >= $d7))    | sum(.metrics.spend)) | d2),
+        # The counters, because these are the budget -- the chip says what is
+        # left of a cap, and a ledger sum would say something slightly else.
+        cycle: { spend: ($ks | d2),
+                 cap: (if $kc > 0 then ($kc | d2) else null end),
+                 pct: (if $kc > 0 then ($ks / $kc | pct) else null end),
+                 start: (if $cstart == "" then null else $cstart end),
+                 resets: (if $creset == "" then null else $creset end),
+                 days_left: $dleft },
+        team: (if ($t.team_id // null) then
+                 { alias: ($t.team_alias // null),
+                   spend: (($t.spend // 0) | d2),
+                   cap: (if ($t.max_budget // 0) > 0 then ($t.max_budget | d2) else null end),
+                   pct: (if ($t.max_budget // 0) > 0 then (($t.spend // 0) / $t.max_budget | pct) else null end) }
+               else null end) }
   ' >"$TMP/out.json" || return 1
   install -m 640 "$TMP/out.json" "$out"
 }

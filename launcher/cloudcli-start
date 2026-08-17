@@ -631,9 +631,18 @@ COST_CHIP = (
     'const _p=async()=>{try{'
     'const _r=await fetch("/cost.json?t="+Date.now(),{cache:"no-store"});'
     'if(!_r.ok)return;const _j=await _r.json();'
-    'window.__kitCostText="today $"+_j.today;'
-    'window.__kitCostTitle="LiteLLM spend — 7d $"+_j.last7+" · 30d $"+_j.last30'
-    '+" · lifetime $"+_j.lifetime+" · generated "+_j.generated+" UTC";'
+    # The cycle is what is being tracked, so the chip carries it beside today --
+    # a percentage of a cap rather than a total, since the total is not the thing
+    # that runs out.
+    'const _c=_j.cycle||{};'
+    'window.__kitCostText="today $"+_j.today'
+    '+(_c.pct!=null?" · cycle "+_c.pct+"%":(_c.spend?" · cycle $"+_c.spend:""));'
+    'window.__kitCostTitle="LiteLLM spend — cycle $"+(_c.spend||"?")'
+    '+(_c.cap?" of $"+_c.cap:"")+(_c.resets?", resets "+_c.resets+" ("+_c.days_left+"d)":"")'
+    '+" · 7d $"+_j.last7'
+    '+(_j.team?" · team $"+_j.team.spend+(_j.team.cap?" of $"+_j.team.cap:"")'
+    '+(_j.team.pct!=null?" ("+_j.team.pct+"%)":""):"")'
+    '+" · generated "+_j.generated+" UTC";'
     'for(const _n of document.querySelectorAll("[data-kit-cost]"))'
     '{_n.textContent=window.__kitCostText;_n.title=window.__kitCostTitle}'
     '}catch{}};'
