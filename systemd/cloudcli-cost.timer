@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the LiteLLM spend report every few minutes
+
+[Timer]
+# Soon after login, then on a cadence: spend moves in cents per request, so a
+# five-minute-old figure is a current figure, and the proxy's ledger endpoint is
+# not something to poll harder than the number changes.
+OnStartupSec=1min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=cloudcli-cost.service
+
+[Install]
+WantedBy=timers.target

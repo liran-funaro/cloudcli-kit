@@ -1,0 +1,14 @@
+[Unit]
+Description=Write the LiteLLM spend report CloudCLI's Cost tab reads
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Login shell for the same reason cloudcli.service uses one: the proxy URL and
+# the virtual key come from the shell environment (~/.config/secrets.sh), and a
+# unit's own Environment= would mean a second copy of a credential.
+ExecStart=/bin/bash -lc '%h/bin/cloudcli-cost'
+# The report is a page about money, not a service: a failed run leaves the last
+# one in place and says so in the log, and the next tick tries again.
+SuccessExitStatus=1
+Nice=10

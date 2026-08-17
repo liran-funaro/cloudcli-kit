@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Install cloudcli-kit: one stylesheet, and a launcher that applies it and the
-# rest of the patches to the installed package on every start, so a package
-# upgrade cannot silently revert them.
+# Install cloudcli-kit: one stylesheet, a launcher that applies it and the rest
+# of the patches to the installed package on every start so a package upgrade
+# cannot silently revert them, and the Cost tab.
 #
 #   ~/.config/cloudcli/ide-theme.css   appearance -- yours to retune, seeded once
 #   ~/bin/cloudcli-start               applies it to the package on every start,
 #                                      so an upgrade cannot revert it
+#   ~/bin/cloudcli-cost                writes the LiteLLM spend report
+#   ~/.claude-code-ui/plugins/cost/    the tab that shows it
 #
 #   --force        overwrite ide-theme.css with the repo's copy (backs up first)
+#   --no-cost      skip the Cost tab and its report script
 #   --no-apply     install the files but do not touch the package yet
 #
 # Never restarts anything: the running server and any in-flight session are left
@@ -20,10 +23,12 @@ BIN="${CLOUDCLI_BIN:-$HOME/bin}"
 PLUGINS="$HOME/.claude-code-ui/plugins"
 FORCE=0
 APPLY=1
+COST=1
 
 for arg in "$@"; do
   case $arg in
     --force) FORCE=1 ;;
+    --no-cost) COST=0 ;;
     --no-apply) APPLY=0 ;;
     # The header comment above IS the help text, printed up to the first line
     # of code -- so editing one can never leave the other behind.
@@ -93,6 +98,35 @@ case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "  note: $BIN is not on PATH -- call it by full path, or add it" ;;
 esac
+
+# --- the Cost tab ------------------------------------------------------------
+# LiteLLM-specific, so it is a tab and a script rather than anything the app or
+# its server learns about. The plugin is COPIED rather than cloned: it lives in a
+# subdirectory here, and the registry wants a manifest at the plugin root -- so
+# the UI's Update button has nothing to pull and re-running this script is how an
+# update arrives. scanPlugins() tests isDirectory(), which a symlink fails, so a
+# real directory it must be.
+if [[ $COST == 1 ]]; then
+  echo "cost tab:"
+  cp -f "$REPO/cost/litellm-cost.sh" "$BIN/cloudcli-cost"
+  chmod +x "$BIN/cloudcli-cost"
+  echo "  installed $BIN/cloudcli-cost"
+  mkdir -p "$PLUGINS/cost"
+  for f in manifest.json index.js icon.svg; do
+    cp -f "$REPO/cost/plugin/$f" "$PLUGINS/cost/$f"
+  done
+  echo "  installed $PLUGINS/cost -- enable it in Settings > Plugins"
+  if [[ -z ${LITELLM_BASE_URL:-${ANTHROPIC_BASE_URL:-}} ]]; then
+    echo "  note: no LITELLM_BASE_URL/ANTHROPIC_BASE_URL in this shell, so the"
+    echo "  report cannot be written yet; the launcher retries on every start"
+  fi
+  if ! systemctl --user list-unit-files cloudcli-cost.timer >/dev/null 2>&1 ||
+     ! systemctl --user is-enabled cloudcli-cost.timer >/dev/null 2>&1; then
+    echo "  for a report that refreshes on its own, install the timer:"
+    echo "    cp $REPO/systemd/cloudcli-cost.{service,timer} ~/.config/systemd/user/"
+    echo "    systemctl --user daemon-reload && systemctl --user enable --now cloudcli-cost.timer"
+  fi
+fi
 
 # --- apply to the installed package -----------------------------------------
 if [[ $APPLY == 1 ]]; then

@@ -1,27 +1,29 @@
 # cloudcli-kit
 
 Personal customisations for [CloudCLI UI](https://github.com/siteboon/claudecodeui) — a
-stylesheet and a launcher that re-applies it, and everything below, on every start, so a
-package upgrade cannot silently revert them.
+stylesheet, a launcher that re-applies it and everything below on every start so a package
+upgrade cannot silently revert them, and a Cost tab for the LiteLLM proxy behind it.
 
 Surfaces, accent, typography, inline code, full-width chat. Conversations as the sidebar's
 default, its rows drawn the way the Projects list draws a session — the activity dot, the
 spinner, the session menu — plus the project each one belongs to. Each model described,
 priced, and pruned in the model menu. The CLI's own commands — `/compact` among them — in the
 composer's command menu. Enter for a newline, ⌘/Ctrl+Enter to send. A Stop that always stops,
-and a message typed mid-turn steering the turn it lands in. One command: `./install.sh`.
+and a message typed mid-turn steering the turn it lands in. A Cost tab showing what the proxy
+has billed. One command: `./install.sh`.
 
 ## Why a launcher and not a plugin
 
-CloudCLI has a plugin API, and this kit used to use it — a **Recent** tab listing every
-project's conversations by recency, with a chip on the ones that had stopped to ask you
-something. It is [retired](#the-retired-recent-tab): the sidebar's own Conversations tab,
-once patched as described below, is that list, in the place you already look.
+CloudCLI has a plugin API, and the kit uses it for exactly one thing: the [Cost
+tab](#the-cost-tab). A tab is what that API is for. It once carried a second one — a
+**Recent** tab listing every project's conversations by recency, with a chip on the ones that
+had stopped to ask you something — and that one is [retired](#the-retired-recent-tab),
+because the sidebar's own Conversations tab, patched as described below, is that list in the
+place you already look.
 
-Which leaves the plugin API carrying none of this, and it could not have. A plugin's module
-is fetched and `import()`ed **when its tab is activated**, and torn down via `unmount()`
-when you navigate away. That is exactly right for a tab, and structurally wrong for
-everything here:
+Everything else here a plugin could not do. Its module is fetched and `import()`ed **when its
+tab is activated**, and torn down via `unmount()` when you navigate away — exactly right for
+a tab, and structurally wrong for the rest:
 
 - **A stylesheet must be in effect at first paint, on every page load.** As a plugin it
   would apply only after you visited the tab, and only until you left it.
@@ -43,7 +45,7 @@ everything here:
   module is fetched. The sixth *is* stored in the browser, but a plugin could only overwrite
   the value you chose — the bundle edit changes the default and leaves your choice alone.
 
-So it is one stylesheet plus a launcher. The upside of doing it this way rather than forking
+So it is one stylesheet, a launcher, and one tab. The upside of doing it this way rather than forking
 CloudCLI: nothing here lives in a file upstream also edits, so there is never a merge —
 upgrading is `npm i -g @cloudcli-ai/cloudcli` and one launcher run. (Upstream ships a
 release roughly every 4–5 days, and does not commit `dist/`, so a fork would mean a weekly
@@ -57,11 +59,13 @@ cd cloudcli-kit
 ./install.sh
 ```
 
-That seeds one file and installs the launcher:
+That seeds one file and installs the launcher, the report script and the Cost tab:
 
 ```
 ~/.config/cloudcli/ide-theme.css   appearance — yours to retune, seeded once
 ~/bin/cloudcli-start               applies everything to the package on every start
+~/bin/cloudcli-cost                writes the LiteLLM spend report the Cost tab shows
+~/.claude-code-ui/plugins/cost/    that tab
 ```
 
 Nothing is restarted, so it is safe to run while a session is in progress; reload the
@@ -281,6 +285,63 @@ Eight edits across three server modules, so it is all-or-nothing by construction
 naming a function that failed to be inserted is a ReferenceError at import, i.e. a server that
 does not start. And every one of them is **reversed** by `CLOUDCLI_STEER=0`, back to
 byte-identical with what upstream shipped. Turning steering off is a restart, not a reinstall.
+
+## The Cost tab
+
+A LiteLLM proxy bills per token, and nothing in CloudCLI knows that. So the kit
+carries [`cost/litellm-cost.sh`](cost/litellm-cost.sh) — the terminal dashboard
+`litellm-spend.sh` with the terminal taken out: the same three queries against
+`/user/info`, `/key/list` and `/user/daily/activity`, the same jq, rendering one
+standalone HTML page instead of columns. Lifetime spend from the ledger, every key
+against its cap, lifetime per key *including rotated and deleted ones*, then by
+model, by month, and the token and cache figures behind it.
+
+**This is the one part of the kit that must never go upstream.** A LiteLLM ledger
+is not something CloudCLI knows or should know about, which is also why the report
+is a *file the app serves* rather than a route the app implements: nothing in the
+server or the bundle is patched for it.
+
+Three pieces, each doing only its own job:
+
+| | |
+|---|---|
+| `~/bin/cloudcli-cost` | queries the proxy, writes `dist/cost.html`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in the page |
+| the **Cost** tab | a plugin that frames that page, says how old it is, and reloads it every 60s |
+| `cloudcli-cost.timer` | rewrites the report every 5 minutes |
+
+The launcher writes a report at every start too, so the tab has something from the
+first reload — best-effort by construction, since a package upgrade wipes `dist/`
+and a shell without the proxy variables cannot query anything. Neither is a reason
+to refuse to start; when the query fails the page says why, which is more use in a
+tab than a 404. `CLOUDCLI_COST=0` skips the step, `CLOUDCLI_COST_OUT` moves the
+page.
+
+The tab frames the page rather than injecting it, which is the opposite of what
+the retired Recent tab did — and for the opposite reason. That one rendered JSON
+it fetched, so inheriting the app's CSS variables through a shadow boundary was
+exactly right. This one shows a document that already has a stylesheet, and an
+iframe is the only boundary that keeps two stylesheets apart. Custom properties do
+not cross into a frame, so the theme is passed in the URL instead and the page
+reads it from there.
+
+Nothing sandboxes that frame, deliberately: it is a file this kit writes, in the
+app's own origin, and it needs its own script for the theme. What makes that safe
+is at the other end — every value the proxy supplies (key aliases, model names,
+the account email, an error message) is HTML-escaped as the page is written.
+
+```bash
+./install.sh                    # includes the tab; --no-cost leaves it out
+cloudcli-cost --out /tmp/x.html # look at the page without touching the deployed one
+
+# refresh on its own, rather than only at launcher start:
+cp systemd/cloudcli-cost.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now cloudcli-cost.timer
+```
+
+The plugin is **copied** into `~/.claude-code-ui/plugins/cost/`, not cloned: it
+lives in a subdirectory here and the registry wants a manifest at the plugin root,
+so the UI's **Update** button has nothing to pull and re-running `install.sh` is
+how a change arrives. Enable it once in Settings → Plugins.
 
 ## Retuning the appearance
 

@@ -1233,6 +1233,27 @@ elif (( ok )); then
   echo "anchors: $ok/$ok ok"
 fi
 
+# --- the Cost tab's report ---------------------------------------------------
+# A page in the static root, written by a script that talks to the LiteLLM proxy
+# -- so the tab needs no server route, no key in the browser, and nothing
+# upstream. Written here so the tab has something to show from the first reload;
+# after that cloudcli-cost.timer keeps it current. Best-effort by construction:
+# an upgrade wipes dist, no proxy env means no report, and neither is a reason to
+# refuse to start. CLOUDCLI_COST=0 skips it.
+COST_OUT="${CLOUDCLI_COST_OUT:-$PKG/dist/cost.html}"
+if [[ ${CLOUDCLI_COST:-1} == 1 ]]; then
+  COST_SH="$(command -v cloudcli-cost 2>/dev/null || true)"
+  if [[ -z $COST_SH ]]; then
+    echo "cost: no cloudcli-cost on PATH -- run install.sh to add the report" >&2
+  elif CLOUDCLI_COST_OUT="$COST_OUT" "$COST_SH" >/dev/null 2>&1; then
+    echo "cost: report written to ${COST_OUT#"$PKG/"}"
+  else
+    # The script still writes a page saying why, which is more use in the tab
+    # than a 404 -- so this is a note, not a warning.
+    echo "cost: proxy unreachable; the tab will say so (${COST_OUT#"$PKG/"})"
+  fi
+fi
+
 if [[ ${CLOUDCLI_PATCH_ONLY:-0} == 1 ]]; then
   echo "patches applied; server not started (CLOUDCLI_PATCH_ONLY=1)"
   exit 0

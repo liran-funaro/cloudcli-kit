@@ -1,0 +1,12 @@
+{
+  "name": "cost",
+  "displayName": "Cost",
+  "version": "1.0.0",
+  "description": "LiteLLM spend: lifetime from the proxy ledger, every key against its cap, and where it went by model and month.",
+  "author": "Liran Funaro",
+  "icon": "icon.svg",
+  "type": "module",
+  "slot": "tab",
+  "entry": "index.js",
+  "permissions": []
+}
