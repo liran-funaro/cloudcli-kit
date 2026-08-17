@@ -103,34 +103,67 @@ esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 # TSV on stdin -> one HTML table. First row is the header unless --no-head is
 # given, in which case every row is data and the first column labels it.
+#
+# Alignment is decided per COLUMN, not per cell, and the header takes the same
+# side as the column under it -- which is why the whole table is read before any
+# of it is written. Deciding cell by cell was the bug that made a header sit left
+# of its own numbers, and made a column ragged wherever one row said "—" and the
+# next said "$12.34".
 table() {
   local head=1
   [[ ${1:-} == --no-head ]] && head=0
-  local first=1 cells html
-  printf '<table>\n'
+  local -a rows=() cells
+  local line
   while IFS= read -r line; do
     [[ -z $line ]] && continue
+    rows+=("$line")
+  done
+  [[ ${#rows[@]} -eq 0 ]] && { printf '<table></table>\n'; return; }
+
+  # A column is numeric when every value in it is -- money, a count, a
+  # percentage, a dash standing in for one -- ignoring blanks. Column 0 is the
+  # label in every table here, so it stays left whatever it looks like.
+  local -a numeric=()
+  local first_data=$head cols=0 i cell
+  for line in "${rows[@]}"; do
+    IFS=$'\t' read -r -a cells <<<"$line"
+    [[ ${#cells[@]} -gt $cols ]] && cols=${#cells[@]}
+  done
+  for ((i = 0; i < cols; i++)); do numeric[i]=$((i > 0 ? 1 : 0)); done
+  local row_index=0
+  for line in "${rows[@]}"; do
+    if [[ $row_index -eq 0 && $head -eq 1 ]]; then row_index=1; continue; fi
+    IFS=$'\t' read -r -a cells <<<"$line"
+    for ((i = 1; i < cols; i++)); do
+      cell="${cells[i]:-}"
+      [[ -z $cell ]] && continue
+      [[ $cell =~ ^(\$|[0-9]|—|-) ]] || numeric[i]=0
+    done
+    row_index=$((row_index + 1))
+  done
+
+  local html
+  printf '<table>\n'
+  row_index=0
+  for line in "${rows[@]}"; do
     IFS=$'\t' read -r -a cells <<<"$line"
     html=''
-    for cell in "${cells[@]}"; do
-      if [[ $first -eq 1 && $head -eq 1 ]]; then
-        html+="<th>$(printf '%s' "$cell" | esc)</th>"
+    for ((i = 0; i < cols; i++)); do
+      cell="$(printf '%s' "${cells[i]:-}" | esc)"
+      local class=''
+      [[ ${numeric[i]} -eq 1 ]] && class=' class="n"'
+      if [[ $row_index -eq 0 && $head -eq 1 ]]; then
+        html+="<th$class>$cell</th>"
       else
-        # Money, percentages and counts read better right-aligned; the first
-        # column is a label, so it stays left.
-        if [[ ${#html} -gt 0 && $cell =~ ^(\$|[0-9]|—|-) ]]; then
-          html+="<td class=\"n\">$(printf '%s' "$cell" | esc)</td>"
-        else
-          html+="<td>$(printf '%s' "$cell" | esc)</td>"
-        fi
+        html+="<td$class>$cell</td>"
       fi
     done
-    if [[ $first -eq 1 && $head -eq 1 ]]; then
+    if [[ $row_index -eq 0 && $head -eq 1 ]]; then
       printf '<thead><tr>%s</tr></thead>\n<tbody>\n' "$html"
     else
       printf '<tr>%s</tr>\n' "$html"
     fi
-    first=0
+    row_index=$((row_index + 1))
   done
   [[ $head -eq 1 ]] && printf '</tbody>\n'
   printf '</table>\n'
@@ -426,7 +459,7 @@ render() {
 
   # ---- the team, for reference
   if [[ -s $TMP/teamday.json && -s $TMP/team.json ]]; then
-    section 'Team — every key billing against it, not only yours'
+    section 'Team — spend per member, every key billing against it'
     jq -r --slurpfile td "$TMP/teamday.json" "$JQ_LIB"'
       (.team_info // .) as $t
       | [ ["team", ($t.team_alias // $t.team_id // "?")],
@@ -442,40 +475,73 @@ render() {
     ' "$TMP/team.json" | table --no-head
 
     printf '<div class="scroll">\n'
-    jq -r --arg today "$TODAY" --slurpfile mine "$TMP/keys.json" "$JQ_LIB"'
-      ([ ($mine[0].keys // [])[] | .token ]) as $own
+    # Per member, not per key -- one person's three keys are one row. The ledger
+    # names a key by alias and never by owner, so a member is matched to an alias
+    # by NAME: the alias up to its first separator against the email's local part
+    # or that part's first dot-segment, and only when exactly one member matches.
+    # An alias nothing matches stays its own row, which is why the member column
+    # is an email when it is a person and an alias when it is a guess declined.
+    jq -r --arg today "$TODAY" --slurpfile mine "$TMP/keys.json" \
+          --slurpfile ti "$TMP/team.json" "$JQ_LIB"'
+      def norm: ascii_downcase | split("-")[0] | split("_")[0] | gsub("^ +| +$"; "");
+      def loc($e): $e | ascii_downcase | split("@")[0];
+      def resolve($alias; $emails):
+        ($alias | norm) as $a
+        | [ $emails[]
+            | select((loc(.) == $a) or ((loc(.) | split(".")[0]) == $a)) ]
+        | if length == 1 then .[0] else null end;
+      (($ti[0].team_info // $ti[0]) as $t
+        | [ ($t.members_with_roles // $t.members // [])[] | .user_email // empty ]) as $emails
+      | ([ ($mine[0].keys // [])[] | .token ]) as $own
       | [ .results[]? as $d
           | ($d.breakdown.api_keys // {} | to_entries[]
              | {k: .key, s: (.value.metrics.spend // 0), r: (.value.metrics.api_requests // 0),
                 a: (.value.metadata.key_alias // null), d: $d.date}) ]
       | group_by(.k)
       | map({ k: .[0].k,
-              a: (map(.a) | map(select(. != null)) | first),
+              a: ((map(.a) | map(select(. != null)) | first) // "(no alias)"),
               s: sum(.s), r: sum(.r),
               t: (map(select(.d == $today)) | sum(.s)),
-              first: (map(.d) | min), last: (map(.d) | max) })
+              last: (map(.d) | max) })
       | map(select(.s > 0.005 or .r > 0))
-      | ( ["KEY", "ALIAS", "SPEND", "TODAY", "REQUESTS", "FIRST", "LAST"],
+      | map(. as $row
+            | . + { who: (resolve(.a; $emails) // .a),
+                    matched: (resolve(.a; $emails) != null),
+                    mine: (($own | index($row.k)) != null) })
+      | group_by(.who)
+      | map({ who: .[0].who,
+              matched: .[0].matched,
+              aliases: (map(.a) | unique),
+              n: length,
+              s: sum(.s), t: sum(.t), r: sum(.r),
+              last: (map(.last) | max),
+              mine: (map(.mine) | any) })
+      | ( ["MEMBER", "KEYS", "SPEND", "TODAY", "REQUESTS", "LAST"],
           ( sort_by(-.s)[]
-            # Bound, because `$own | index(...)` rebinds `.` to that array.
-            | . as $row
-            | [ .k[0:8] + "…",
-                (.a // "(no alias)") + (if ($own | index($row.k)) then " · yours" else "" end),
+            | [ .who + (if .mine then " · yours" else "" end),
+                ((if .n > 1 then (.n | tostring) + " · " else "" end)
+                 + (.aliases[0:4] | join(", "))
+                 + (if (.aliases | length) > 4
+                    then " +" + (((.aliases | length) - 4) | tostring) else "" end)),
                 "$" + (.s | d2),
                 (if .t > 0.005 then "$" + (.t | d2) else "—" end),
-                (.r | tostring), .first, .last ] ) )
+                (.r | tostring), .last ] ) )
       | @tsv
     ' "$TMP/teamday.json" | table
     printf '</div>\n'
 
     # What the numbers above cannot say, said once rather than guessed at.
-    printf '<p class="note">A key is identified here by its alias, because that is '
-    printf 'all the team ledger carries — no owner, and no email. Reading another '
-    printf 'member&#39;s user record needs an admin key (a member key gets 403), so '
-    printf 'for keys that are not yours there is no cap, no reset date and no '
-    printf 'per-person total; the team counter above is the reset-scoped figure that '
-    printf 'does exist. Spend and today are the ledger&#39;s, which is why a rotated '
-    printf 'or deleted key still appears.</p>\n'
+    printf '<p class="note">A member column that reads as an email was matched to '
+    printf 'its key aliases by name — the alias up to its first separator against '
+    printf 'the email&#39;s local part, and only where exactly one member matched. '
+    printf 'One that reads as an alias is a match declined rather than a person '
+    printf 'identified: the team ledger carries a key&#39;s alias and never its '
+    printf 'owner, so the rest cannot be attributed without guessing. Reading '
+    printf 'another member&#39;s user record needs an admin key (a member key gets '
+    printf '403), so for keys that are not yours there is also no cap and no reset '
+    printf 'date — the team counter above is the reset-scoped figure that does '
+    printf 'exist. Spend and today are the ledger&#39;s, which is why a rotated or '
+    printf 'deleted key still counts.</p>\n'
     end_section
   fi
 

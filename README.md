@@ -320,17 +320,26 @@ is not something CloudCLI knows or should know about, which is also why the repo
 is a *file the app serves* rather than a route the app implements: nothing in the
 server or the bundle is patched for it.
 
-Last comes the team, for reference: **every key billing against it, not only yours**
-— alias, spend, today, requests, first and last activity, with your own marked. It
-is a separate pair of queries (`/team/info` and `/team/daily/activity`) and a
+Last comes the team, for reference: **spend per member, over every key billing
+against it** — not only yours. One row per person, their keys listed succinctly
+beside it, then spend, today, requests and last activity, with your own row marked.
+It is a separate pair of queries (`/team/info` and `/team/daily/activity`) and a
 separate failure: a key with no team, or a proxy that refuses a member those
 endpoints, loses that section and nothing else.
 
-What it cannot show, it says rather than guesses. A key is identified by its alias,
-because that is all the team ledger carries — no owner, no email. Reading another
-member's user record needs an admin key (a member key gets `403`, checked), so for
-keys that are not yours there is no cap, no reset date and no per-person total; the
-team's own counter against its cap is the reset-scoped figure that does exist.
+Per *member* takes a match, because the ledger names a key by alias and never by
+owner. The rule is narrow and stated on the page: the alias up to its first
+separator, against the email's local part or that part's first dot-segment, and only
+where exactly one member matches — which here resolves 14 of 26 aliases, and folds
+`Liran`, `Liran-Mac` and `Liran - Full` into one row. An alias nothing matches
+**stays its own row**, so the member column reads as an email when it is a person
+and as an alias when it is a guess declined. Attributing someone's spend to whoever's
+name looked closest would be worse than leaving it unattributed.
+
+What it still cannot show, it says. Reading another member's user record needs an
+admin key (a member key gets `403`, checked), so for keys that are not yours there is
+no cap and no reset date; the team's own counter against its cap is the reset-scoped
+figure that does exist.
 
 Three pieces, each doing only its own job:
 
