@@ -312,18 +312,31 @@ carries [`cost/litellm-cost.sh`](cost/litellm-cost.sh) — the terminal dashboar
 `/user/info`, `/key/list` and `/user/daily/activity`, the same jq, rendering one
 standalone HTML page instead of columns. Lifetime spend from the ledger, every key
 against its cap, lifetime per key *including rotated and deleted ones*, then by
-model, by month, and the token and cache figures behind it.
+model, by month, the token and cache figures behind it — and the team's keys, which
+the terminal version never showed.
 
 **This is the one part of the kit that must never go upstream.** A LiteLLM ledger
 is not something CloudCLI knows or should know about, which is also why the report
 is a *file the app serves* rather than a route the app implements: nothing in the
 server or the bundle is patched for it.
 
+Last comes the team, for reference: **every key billing against it, not only yours**
+— alias, spend, today, requests, first and last activity, with your own marked. It
+is a separate pair of queries (`/team/info` and `/team/daily/activity`) and a
+separate failure: a key with no team, or a proxy that refuses a member those
+endpoints, loses that section and nothing else.
+
+What it cannot show, it says rather than guesses. A key is identified by its alias,
+because that is all the team ledger carries — no owner, no email. Reading another
+member's user record needs an admin key (a member key gets `403`, checked), so for
+keys that are not yours there is no cap, no reset date and no per-person total; the
+team's own counter against its cap is the reset-scoped figure that does exist.
+
 Three pieces, each doing only its own job:
 
 | | |
 |---|---|
-| `~/bin/cloudcli-cost` | queries the proxy, writes `dist/cost.html` and `dist/cost.json`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in what it writes |
+| `~/bin/cloudcli-cost` | queries the proxy (five endpoints; the two team ones are optional), writes `dist/cost.html` and `dist/cost.json`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in what it writes |
 | the **Cost** tab | a plugin that frames that page, says how old it is, and reloads it every 60s |
 | the sidebar chip | today's figure, permanently above Settings — a bundle edit, described with the others below |
 | `cloudcli-cost.timer` | rewrites both files every 5 minutes |

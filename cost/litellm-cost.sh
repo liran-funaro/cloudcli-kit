@@ -7,6 +7,12 @@
 # page and exits, so something else decides when to run it -- the launcher does
 # once at start, and systemd/cloudcli-cost.timer does every few minutes.
 #
+# Two queries more than that script made, for the section it never had: the team,
+# and every key billing against it rather than only yours. Both are optional --
+# no team, or a proxy that refuses a member those endpoints, loses that section
+# and nothing else. A member key cannot read another member's user record (403),
+# so a key there is named by its alias and carries no cap or reset date.
+#
 # LITELLM-SPECIFIC, AND STAYS IN THIS KIT. A LiteLLM proxy's /user/daily/activity
 # ledger is not something CloudCLI knows or should know about, so none of this
 # belongs upstream; it is why the report is a file the app serves rather than a
@@ -29,6 +35,7 @@
 #   ANTHROPIC_AUTH_TOKEN / LITELLM_TOKEN      virtual key (required)
 #   ANTHROPIC_BASE_URL   / LITELLM_BASE_URL   proxy base URL (required)
 #   LITELLM_TOKEN_FILE                        read the key from a file instead
+#   LITELLM_TEAM_ID                           team to report on, default your first
 #   SPEND_START                               ledger window start, default -365d
 #   TIMEOUT                                   per-request seconds, default 45
 #   CLOUDCLI_COST_OUT                         where to write the page
@@ -220,6 +227,9 @@ page_head() {
     border-radius: 8px; background: var(--warn-bg); color: var(--warn);
   }
   .fail code { font-family: ui-monospace, monospace; word-break: break-all; }
+  .note {
+    margin: 10px 0 0; max-width: 78ch; color: var(--muted); font-size: 11px; line-height: 1.6;
+  }
   footer { margin-top: 28px; color: var(--muted); font-size: 11px; }
 </style>
 <script>
@@ -235,6 +245,21 @@ HTML
 api "/user/info" "$TMP/user.json"
 api "/key/list?return_full_object=true&size=100" "$TMP/keys.json"   # 100 is the API max
 api "/user/daily/activity?start_date=${START}&end_date=${TODAY}&page_size=1000" "$TMP/day.json"
+
+# The team, for reference — every key that billed against it, not only yours.
+# Best-effort and separate from the three above: a key with no team, or a proxy
+# that does not let a member read team endpoints, still gets the whole report
+# minus this one section. The team id comes from your own /user/info unless
+# LITELLM_TEAM_ID names another.
+TEAM="${LITELLM_TEAM_ID:-$(jq -r '(.teams // [])[0].team_id // empty' "$TMP/user.json" 2>/dev/null)}"
+if [[ -n $TEAM ]]; then
+  api "/team/info?team_id=${TEAM}" "$TMP/team.json"
+  api "/team/daily/activity?start_date=${START}&end_date=${TODAY}&page_size=1000" "$TMP/teamday.json"
+  # One unreadable endpoint drops the section rather than the report.
+  for f in team teamday; do
+    api_error "$TMP/$f.json" >/dev/null && { rm -f "$TMP/team.json" "$TMP/teamday.json"; break; }
+  done
+fi
 
 FAIL=""
 for f in user keys day; do
@@ -398,6 +423,61 @@ render() {
       ][] | @tsv
   ' "$TMP/day.json" | table --no-head
   end_section
+
+  # ---- the team, for reference
+  if [[ -s $TMP/teamday.json && -s $TMP/team.json ]]; then
+    section 'Team — every key billing against it, not only yours'
+    jq -r --slurpfile td "$TMP/teamday.json" "$JQ_LIB"'
+      (.team_info // .) as $t
+      | [ ["team", ($t.team_alias // $t.team_id // "?")],
+          ["members", (($t.members_with_roles // $t.members // []) | length | tostring)],
+          ["cycle counter", "$" + (($t.spend // 0) | d2)
+             + (if ($t.max_budget // 0) > 0
+                then " of $" + ($t.max_budget | d2)
+                     + " (" + (($t.spend // 0) / $t.max_budget | pct | tostring) + "%, $"
+                     + (($t.max_budget - ($t.spend // 0)) | d2) + " left)"
+                else "" end)],
+          ["window (ledger)", "$" + (($td[0].metadata.total_spend // 0) | d2)]
+        ][] | @tsv
+    ' "$TMP/team.json" | table --no-head
+
+    printf '<div class="scroll">\n'
+    jq -r --arg today "$TODAY" --slurpfile mine "$TMP/keys.json" "$JQ_LIB"'
+      ([ ($mine[0].keys // [])[] | .token ]) as $own
+      | [ .results[]? as $d
+          | ($d.breakdown.api_keys // {} | to_entries[]
+             | {k: .key, s: (.value.metrics.spend // 0), r: (.value.metrics.api_requests // 0),
+                a: (.value.metadata.key_alias // null), d: $d.date}) ]
+      | group_by(.k)
+      | map({ k: .[0].k,
+              a: (map(.a) | map(select(. != null)) | first),
+              s: sum(.s), r: sum(.r),
+              t: (map(select(.d == $today)) | sum(.s)),
+              first: (map(.d) | min), last: (map(.d) | max) })
+      | map(select(.s > 0.005 or .r > 0))
+      | ( ["KEY", "ALIAS", "SPEND", "TODAY", "REQUESTS", "FIRST", "LAST"],
+          ( sort_by(-.s)[]
+            # Bound, because `$own | index(...)` rebinds `.` to that array.
+            | . as $row
+            | [ .k[0:8] + "…",
+                (.a // "(no alias)") + (if ($own | index($row.k)) then " · yours" else "" end),
+                "$" + (.s | d2),
+                (if .t > 0.005 then "$" + (.t | d2) else "—" end),
+                (.r | tostring), .first, .last ] ) )
+      | @tsv
+    ' "$TMP/teamday.json" | table
+    printf '</div>\n'
+
+    # What the numbers above cannot say, said once rather than guessed at.
+    printf '<p class="note">A key is identified here by its alias, because that is '
+    printf 'all the team ledger carries — no owner, and no email. Reading another '
+    printf 'member&#39;s user record needs an admin key (a member key gets 403), so '
+    printf 'for keys that are not yours there is no cap, no reset date and no '
+    printf 'per-person total; the team counter above is the reset-scoped figure that '
+    printf 'does exist. Spend and today are the ledger&#39;s, which is why a rotated '
+    printf 'or deleted key still appears.</p>\n'
+    end_section
+  fi
 
   printf '<footer>litellm-cost.sh · lifetime figures come from the proxy ledger, '
   printf 'which survives key rotation; cycle counters are what enforce a cap.</footer>\n'
