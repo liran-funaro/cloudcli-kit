@@ -9,8 +9,10 @@ default, its rows drawn the way the Projects list draws a session — the activi
 spinner, the session menu — plus the project each one belongs to. Each model described,
 priced, and pruned in the model menu. The CLI's own commands — `/compact` among them — in the
 composer's command menu. Enter for a newline, ⌘/Ctrl+Enter to send. A Stop that always stops,
-and a message typed mid-turn steering the turn it lands in. A Cost tab showing what the proxy
-has billed. One command: `./install.sh`.
+and a message typed mid-turn steering the turn it lands in. Compaction drawn where it happens —
+a bar while it runs, then what it cost, with the summary folded behind a disclosure instead of
+dropped into the conversation. A Cost tab showing what the proxy has billed. One command:
+`./install.sh`.
 
 ## Why a launcher and not a plugin
 
@@ -92,11 +94,12 @@ The launcher un-seeds what its earlier floating-pill version left behind, and `i
 reports a still-installed plugin directory rather than deleting it: that is a clone with a
 switch beside it in Settings → Plugins, and removing either is yours to do.
 
-## Seven small edits in the bundle
+## Eight small edits in the bundle
 
 Three are things the app already almost does; one is a default worth flipping; one is a
 list keeping itself current; one is a menu that never listed what the CLI can do; one puts a
-number on the page that was only ever a command away:
+number on the page that was only ever a command away; one draws something the app never
+mentioned at all:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
   never persisted, so it reset to Projects on every load.
@@ -168,6 +171,21 @@ number on the page that was only ever a command away:
   — and every later render re-fills the node from what was already fetched, which is why the
   number survives a re-render instead of blinking back to a dash. With no report on disk it
   reads `today —`, and says why in its tooltip.
+- **Compaction, drawn where it happened.** The browser half of [patch
+  9](#compaction-said-out-loud): a dot, one line of numbers, a bar while it runs, and the
+  summary folded behind *full summary* — the disclosure standing in for the CLI's ctrl+o.
+  Two rows are folded into one on the way: the boundary and the summary that follows it are
+  separate records, and a summary sitting alone (an older session, compacted before the CLI
+  wrote boundaries) still gets a row of its own to fold into. A bar with a finished
+  compaction after it is dropped rather than drawn, so history never shows one that will
+  never stop.
+
+  The look is not in the patch. It is `.kit-compact-*` in
+  [`theme/ide-theme.css`](theme/ide-theme.css), loaded after the app's own stylesheet and
+  built from the app's variables — so it follows the theme with no dark-mode copy, and can be
+  retuned without re-patching. The elapsed counter ticks from a `ref` callback for the same
+  reason the [spend chip](#the-cost-tab) does, with one interval for the page that stops
+  itself as soon as no row is left to update.
 - **Enter for a newline, ⌘/Ctrl+Enter to send.** This one the app does have a setting for —
   Quick Settings (the tab on the right edge of the window) → Input Settings → *Send by
   Ctrl+Enter* — it just defaults off, so every browser starts out sending on Enter. The patch
@@ -194,12 +212,13 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 8/8 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, conversation row, conversation refresh, cli commands, cost chip
+frontend: 9/9 applied -- sidebar default, model description, ctrl+enter to send,
+send while running, conversation row, conversation refresh, cli commands, cost chip,
+compaction rows
 ```
 
-Eight because one of them, *send while running*, belongs to steering — described with it
-below. `CLOUDCLI_STEER=0` leaves it out and the run prints `7/7`.
+Nine because one of them, *send while running*, belongs to steering — described with it
+below. `CLOUDCLI_STEER=0` leaves it out and the run prints `8/8`.
 
 Several are read from more than one anchor: the conversation row alone borrows twelve names
 the minifier chose — the classname helper and button variants that give a session row its
@@ -243,12 +262,16 @@ live. The two patches below are server modules too, and land the same way.
 ## A Stop that always stops
 
 Stop — the button, and Esc — calls the SDK's `interrupt()`, which is not a signal but a control
-request *written to the CLI's stdin*. For a single-user-turn query, which is every text-only
-turn here, the SDK closes that stdin at the first `result` it sees. A CLI that outlives its own
-result therefore has nowhere to answer from: the promise never settles, so the session is never
-removed, so the abort handler never returns and the client never receives its terminal
-`complete`. The UI sits on *processing*, Esc does nothing, and every later Stop wedges on the
-same session. Only a server restart clears it.
+request *written to the CLI's stdin*. So it is answered only while the child is alive and
+reading, and a child that has wound down has nowhere to answer from: the promise never settles,
+so the session is never removed, so the abort handler never returns and the client never
+receives its terminal `complete`. The UI sits on *processing*, Esc does nothing, and every later
+Stop wedges on the same session. Only a server restart clears it.
+
+Upstream 1.37.2 narrowed the window — it holds stdin open for the turn, and for up to half an
+hour past it when the turn left background work running — where 1.37.1 closed it at the first
+`result` of every text-only turn. Narrower is not closed: a run whose child has exited, or one
+too busy to read, still wedges.
 
 So the patch gives the control request two seconds and then stops asking: it closes the
 transport, which needs no cooperation from the child. This one is not gated and not optional —
@@ -268,21 +291,23 @@ CLOUDCLI_STEER=0 cloudcli-start     # to turn it off
 
 On by default, and the other side of the same coin as Stop. Upstream holds a
 message typed while a turn is running — it becomes a draft, sent once the run ends. But the
-stdin that carries `interrupt()` is open for the whole run: the SDK spawns the CLI with
-`--input-format stream-json` unconditionally, and the string-prompt path writes its one user
-frame without closing the pipe behind it. A frame pushed in after that is read at the next
-agent-loop boundary, in the **same** turn — the model changes course mid-run, no restart, no
-resume, nothing about how the turn was started has to change. Which is what makes it small.
+stdin that carries `interrupt()` is open for the whole run, and a user frame pushed into it is
+read at the next agent-loop boundary, in the **same** turn — the model changes course mid-run,
+no restart, no resume, nothing about how the turn was started has to change. Which is what
+makes it small.
 
-Three things it has to get right:
+Since 1.37.2 that open pipe is upstream's own doing, and the patch rides it. Every turn is
+sent as a stream that yields its messages and then **parks** (`createHeldPromptStream`),
+deliberately holding stdin open so background work can report back through it and the CLI can
+push follow-up turns. Steering needs exactly that pipe, so the patch puts a queue on the park:
 
-- **Never let the queue end.** `streamInput()` calls `endInput()` when its iterable ends, which
-  closes the stdin that Stop needs. The queue is closed only from `removeSession()`, reached on
-  completion, error and abort — never under a live run.
-- **Skip turns carrying attachments.** Those are handed to the SDK as a generator whose end
-  closes stdin behind it, so a message pushed at one would vanish into a closed pipe. Only runs
-  started from a plain string prompt are marked steerable, read at the `query()` call site with
-  no `await` in between so the mark cannot drift to another run.
+- **The park passes on what is pushed to it.** With nothing steered in it awaits and returns
+  precisely as upstream's `await held` did; a frame pushed in the same tick as the release is
+  drained before it ends, rather than lost to the race.
+- **A push after the release is refused, not queued.** Upstream closes the stream in its own
+  `finally` and on abort, and a frame written then would go into a closed pipe. The refusal
+  reaches the composer as *cannot steer*, so the send is held back the way upstream holds it —
+  rather than recorded as a line nothing acted on.
 - **Write the line down.** The CLI applies the frame but records nothing, and CloudCLI's history
   *is* the CLI's transcript — there is no second copy anywhere. So the launcher appends the line
   itself, in the shape a user turn has, chained onto the newest entry: the reader takes it for a
@@ -290,21 +315,64 @@ Three things it has to get right:
   conversation it has no record of being redirected. Without this the steer is real but
   invisible — the model reacts, and the message is gone on the next reload.
 
+Before 1.37.2 the same trick hung off the SDK's string-prompt path, which left stdin open by
+omission and only for turns without attachments — so those turns had to be sniffed out at the
+`query()` call site and skipped, and the kit ran a second `streamInput()` of its own whose
+queue could never be allowed to end. Upstream now states the lifetime the patch used to infer,
+and all of that went away: every turn is steerable, attachments included.
+
 The browser half is one of the bundle substitutions: the composer's busy guard learns one
 condition, so a send during a run goes out instead of becoming a draft. It is still guarded on a
 global rather than compiled in, but the sense is now the escape hatch — `__cloudcliSteer = false`
 in the console puts a tab back on upstream's hold-it-back composer mid-session, with no restart.
 
 ```
-chat: applied steering history, steering channel, steerable runs, steerable marker, steering
-cleanup, steering export, steering passthrough, steering route; 1 already in place
+chat: applied stop always stops, steering history, steering channel, steering queue, steering
+park, steering pusher, steering export, steering passthrough, steering route
 [KIT] steering <session> mid-turn (32 chars)
 ```
 
-Eight edits across three server modules, so it is all-or-nothing by construction — a facade
-naming a function that failed to be inserted is a ReferenceError at import, i.e. a server that
-does not start. And every one of them is **reversed** by `CLOUDCLI_STEER=0`, back to
-byte-identical with what upstream shipped. Turning steering off is a restart, not a reinstall.
+Eight steering edits across three server modules (the ninth line is Stop), so it is
+all-or-nothing by construction — a facade naming a function that failed to be inserted is a
+ReferenceError at import, i.e. a server that does not start. And every one of them is
+**reversed** by `CLOUDCLI_STEER=0`, back to byte-identical with what upstream shipped. Turning
+steering off is a restart, not a reinstall.
+
+## Compaction, said out loud
+
+Compaction is the one thing the CLI does that CloudCLI never mentions. The normalizer knows
+deltas, text, thinking, tool calls and tool results, and returns nothing at all for a `system`
+event — so both records that describe a compaction are dropped on the floor, and the only trace
+left in the conversation is the summary itself: a 24 KB assistant bubble, arriving with nothing
+in front of it to say what it is or where it came from.
+
+Two records, one row. The status the CLI sends when it starts compacting becomes a row that says
+so, with a bar; the boundary it sends when it is done becomes a row with the numbers — and the
+numbers are worth having, because a compaction is the most expensive thing a long session does
+without being asked:
+
+```
+Compacted · auto · 725k → 18k tokens · 2m 56s        ▸ full summary
+```
+
+`trigger` says whether you asked for it or the window did. Everything the row shows is in the
+message's `content`, so an unpatched bundle renders it as the sentence it is; the `compact`
+field beside it is only how [the browser half](#eight-small-edits-in-the-bundle) draws it. The
+metadata is spelled `compact_metadata` in the live stream and `compactMetadata` in the
+transcript, so both are read — one branch serves the live turn and the history refetch that
+replaces it, because upstream normalizes both through the same function.
+
+There is no percentage anywhere in that stream: the CLI reports that compaction started and,
+much later, what it cost. So the bar slides rather than fills, and an elapsed counter ticks
+beside it. Claiming to know how far along a compaction is would be inventing it.
+
+Not gated on `CLOUDCLI_STEER`, and nothing to turn off — it adds a line to the transcript's own
+account of itself and takes nothing away. Like the patches above it, the server half lands on
+the next server start:
+
+```
+compaction: applied
+```
 
 ## The Cost tab
 
@@ -432,14 +500,14 @@ document.head.insertAdjacentHTML('beforeend',
 ## The anchor self-check
 
 Every override hangs off something upstream *happens* to do — a Tailwind class (`md:w-72`,
-`font-serif`, `prose-invert`), a CSS variable (`--primary`), a localStorage key
-(`auth-token`), a route (`session/:sessionId`). None of that is a published interface, so an
+`font-serif`, `prose-invert`), a CSS variable (`--primary`), the colour name the accent
+substitution rewrites (`blue-`). None of that is a published interface, so an
 upgrade can move one and the override would go quietly ineffective. That is the one genuine
 weakness of patching rather than forking, so the launcher checks each anchor by name and
 says so:
 
 ```
-anchors: 7/7 ok
+anchors: 5/5 ok
 ```
 
 If it reports `MISSING`, that override no longer applies and the selector in
@@ -460,6 +528,15 @@ never edits.
   whose install scripts it hasn't recorded as approved, and says a future release will block
   them — which would produce an install that imports fine and then fails on its first query.
   If the check trips it prints the `npm rebuild` line to fix it and starts nothing.
+- **Upgrading CloudCLI:** `npm install -g @cloudcli-ai/cloudcli` installs to npm's *own*
+  prefix, which is not necessarily where the running install lives (`npm prefix -g` reads
+  `~/.npmrc`; the launcher looks in `~/.npm-global` unless `CLOUDCLI_PREFIX` says otherwise).
+  Name it — `npm install -g --prefix ~/.npm-global @cloudcli-ai/cloudcli` — or you will upgrade
+  a copy nothing runs and wonder why the version did not change. Then re-run `install.sh` (or
+  `CLOUDCLI_PATCH_ONLY=1 cloudcli-start`): an upgrade replaces `dist` and `dist-server`, so
+  every patch above has to be re-applied, which is the whole reason the launcher applies them
+  at start rather than once. The frontend half is live on the next browser reload; the server
+  half needs a restart.
 - Everything is an environment knob, read on every start: `CLOUDCLI_PATCH_ONLY=1` (apply and
   exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_STEER=0`
   (steering off, see above), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet

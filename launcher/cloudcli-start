@@ -659,6 +659,121 @@ if len(SETTINGS.findall(s)) == 1 and not re.search(r'\b__kitCost\w*\b', s):
 else:
     missing.append('cost chip (%d matches)' % len(SETTINGS.findall(s)))
 
+# (9) Compaction, drawn -- the browser half of patch 9. Its server half turns
+# the CLI's two compaction events into ordinary assistant rows carrying a
+# `compact` field, so even unpatched they read as one sentence in the
+# transcript. Here they become what the CLI shows: a bar while it runs, then a
+# line with the numbers, with the summary folded into it rather than dumped
+# into the conversation as a 24 KB bubble.
+#
+# Two sites. The mapper from normalized messages to chat messages carries the
+# field, drops a "compacting" row once a later row says it finished (so history
+# never shows a bar that will never stop), and folds a summary row into the
+# boundary row ahead of it. The row renderer then draws the result -- one
+# branch, inserted ahead of the task-notification branch it is modelled on.
+#
+# The look is not here: it is .kit-compact-* in ide-theme.css, which is loaded
+# after the app's stylesheet, so it can be retuned without re-patching. The
+# only borrowed name is the markdown component, read from a site that names
+# itself -- and it is already called twice inside the function being patched,
+# so it cannot be a local shadowing it there.
+#
+# The elapsed counter ticks from a ref callback rather than state, like the cost
+# chip: one interval for the page, started by whichever row mounts first,
+# stopping itself as soon as no row is left to update.
+MAP = re.compile(r'const (\w+)=\[\],(\w+)=new Map,(\w+)=new Set;'
+                 r'for\(const (\w+) of (\w+)\)\4\.kind==="tool_use"&&\4\.toolId'
+                 r'&&\3\.add\(\4\.toolId\),\4\.kind==="tool_result"&&\4\.toolId'
+                 r'&&\2\.set\(\4\.toolId,\4\);for\(const (\w+) of \5\)\{const (\w+)='
+                 r'\{displayText:\6\.displayText,([^}]*?)isCompactSummary:'
+                 r'\6\.isCompactSummary\};switch\(\6\.kind\)\{')
+NOTIF = re.compile(r'(\w+)\.isTaskNotification\?(\w+)\.jsx\("div",\{className:"w-full",'
+                   r'children:\2\.jsxs\("div",\{className:"flex items-center gap-2 py-0\.5"')
+MD = kit_names(r'\w+\.jsx\((\w+),\{className:"prose prose-sm max-w-none font-serif '
+               r'dark:prose-invert",children:String\(')
+
+# The elapsed reading is derived from the row's own timestamp attribute rather
+# than a captured start, so a row that re-renders (or a second tab) shows the
+# same number, and the interval needs no bookkeeping to find its nodes.
+TICK = (
+    'ref:_e=>{if(!_e)return;'
+    'const _t=()=>{const _l=document.querySelectorAll("[data-kit-since]");'
+    'if(!_l.length){clearInterval(window.__kitTick);window.__kitTick=null;return}'
+    'const _n=Date.now();'
+    'for(const _x of _l){const _s=Date.parse(_x.getAttribute("data-kit-since")||"");'
+    'if(!_s)continue;const _d=Math.max(0,Math.round((_n-_s)/1e3));'
+    '_x.textContent=_d<60?_d+"s":Math.floor(_d/60)+"m "+_d%60+"s"}};'
+    '_t();if(!window.__kitTick)window.__kitTick=setInterval(_t,1e3)},'
+)
+
+
+def kit_compact_map(m):
+    """Carry the field, drop a stale bar, fold the summary into the boundary."""
+    out, tmap, tset, it1, lst, it, ex, mid = m.groups()
+    return (
+        'const %(out)s=[],%(map)s=new Map,%(set)s=new Set;let _kitDone=-1;'
+        'for(const %(it1)s of %(lst)s)'
+        '%(it1)s.kind==="tool_use"&&%(it1)s.toolId&&%(set)s.add(%(it1)s.toolId),'
+        '%(it1)s.kind==="tool_result"&&%(it1)s.toolId&&%(map)s.set(%(it1)s.toolId,%(it1)s),'
+        # The last row that reports a finished compaction. A bar before it is
+        # from a compaction already over; one after it is the live one.
+        '%(it1)s.compact&&%(it1)s.compact.phase!=="running"'
+        '&&(_kitDone=%(lst)s.indexOf(%(it1)s));'
+        'for(const %(it)s of %(lst)s){const %(ex)s={displayText:%(it)s.displayText,'
+        '%(mid)sisCompactSummary:%(it)s.isCompactSummary,compact:%(it)s.compact};'
+        'if(%(it)s.compact||%(it)s.isCompactSummary){'
+        'const _kitAt=%(out)s[%(out)s.length-1];'
+        'if(%(it)s.isCompactSummary){'
+        # The summary follows its boundary, so it belongs to the row already
+        # drawn. On its own -- a session that compacted before the CLI recorded
+        # boundaries -- it still gets a row of its own to fold into.
+        'if(_kitAt&&_kitAt.compact&&!_kitAt.compactSummary)'
+        '{_kitAt.compactSummary=%(it)s.content||"";continue}'
+        '%(out)s.push({type:"assistant",content:"",timestamp:%(it)s.timestamp,'
+        '...%(ex)s,compact:{phase:"done"},compactSummary:%(it)s.content||""});continue}'
+        'if(%(it)s.compact.phase==="running"&&%(lst)s.indexOf(%(it)s)<_kitDone)continue;'
+        '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
+        'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
+        'switch(%(it)s.kind){'
+        % {'out': out, 'map': tmap, 'set': tset, 'it1': it1, 'lst': lst,
+           'it': it, 'ex': ex, 'mid': mid})
+
+
+def kit_compact_row(m):
+    """One branch ahead of the task-notification row, modelled on it."""
+    e, x = m.group(1), m.group(2)
+    return (
+        '%(e)s.compact?%(x)s.jsx("div",{className:"kit-compact",children:'
+        '%(x)s.jsxs("div",{className:"kit-compact-body",children:['
+        '%(x)s.jsxs("div",{className:"kit-compact-line",children:['
+        '%(x)s.jsx("span",{className:"kit-compact-dot"+('
+        '%(e)s.compact.phase==="running"?" is-running":'
+        '%(e)s.compact.phase==="failed"?" is-failed":"")}),'
+        '%(x)s.jsx("span",{children:%(e)s.content||"Compacted"}),'
+        '%(e)s.compact.phase==="running"?%(x)s.jsx("span",'
+        '{className:"kit-compact-elapsed","data-kit-since":%(e)s.timestamp,'
+        '%(tick)schildren:"0s"}):null]}),'
+        '%(e)s.compact.phase==="running"?%(x)s.jsx("div",'
+        '{className:"kit-compact-track",children:%(x)s.jsx("div",'
+        '{className:"kit-compact-fill"})}):null,'
+        '%(e)s.compactSummary?%(x)s.jsxs("details",{className:"kit-compact-more",'
+        'children:[%(x)s.jsx("summary",{children:"full summary"}),'
+        '%(x)s.jsx("div",{className:"kit-compact-summary",children:%(x)s.jsx(%(md)s,'
+        '{className:"prose prose-sm max-w-none font-serif dark:prose-invert",'
+        'children:%(e)s.compactSummary})})]}):null]})}):'
+        % {'e': e, 'x': x, 'md': MD[0] if MD else '', 'tick': TICK}) + m.group(0)
+
+
+counts = (len(MAP.findall(s)), len(NOTIF.findall(s)))
+if MD and counts == (1, 1) and '_kitDone' not in s:
+    s = MAP.sub(kit_compact_map, s, count=1)
+    s = NOTIF.sub(kit_compact_row, s, count=1)
+    applied.append('compaction rows')
+else:
+    missing.append('compaction rows (%s matches%s)'
+                   % ('/'.join(str(c) for c in counts),
+                      '' if MD else ', markdown unnamed'))
+
 open(out, 'w').write(s)
 for m in missing:
     print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
@@ -1243,6 +1358,110 @@ PY
   else
     kit_revert
     echo "WARNING: the chat patch failed, chat left as upstream had it" >&2
+  fi
+fi
+
+# --- patch 9: compaction, said out loud --------------------------------------
+# The server half. Compaction is the one thing the CLI does that CloudCLI never
+# mentions: the normalizer knows deltas, text, thinking, tool calls and tool
+# results and returns nothing at all for a `system` event -- so both events that
+# describe a compaction are dropped, and the only trace left is the summary
+# itself, which lands as a 24 KB assistant bubble with nothing in front of it to
+# say what it is.
+#
+# Two events, one row. The status the CLI sends when it starts compacting
+# becomes a row that says so; the boundary it sends when it is done becomes a
+# row with the numbers -- which live under compact_metadata in the stream and
+# compactMetadata in the transcript, so both spellings are read. Everything the
+# row shows is in `content`, so an unpatched bundle renders it as the sentence it
+# is; the `compact` field beside it is only how patch 9's browser half draws it.
+#
+# Not gated on CLOUDCLI_STEER: this adds a line to the transcript's own account
+# of itself and takes nothing away, so there is nothing to turn off. Like the
+# patches above it lands on the next server start.
+CSP="$PKG/dist-server/server/modules/providers/list/claude/claude-sessions.provider.js"
+if [[ -f $CSP ]]; then
+  cp "$CSP" "$CSP.prepatch"
+  if python3 - "$CSP" <<'PY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+
+# ts and baseId are wanted, so this goes in after them rather than ahead of the
+# branches it precedes.
+OLD = ("        const messages = [];\n"
+       "        const ts = raw.timestamp || new Date().toISOString();\n"
+       "        const baseId = raw.uuid || generateMessageId('claude');\n")
+NEW = OLD + '''        // KIT: compaction ----------------------------------------------------
+        // Neither event that describes it survives the branches below. Both
+        // become one ordinary assistant row: what it says is in `content`, and
+        // the `compact` field beside it is how the patched bundle draws it.
+        if (raw.type === 'system' && (raw.subtype === 'compact_boundary' || raw.subtype === 'status')) {
+            const kitTokens = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`;
+            const kitFor = (n) => {
+                const secs = Math.round(n / 1000);
+                return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+            };
+            const kitRow = (content, compact) => [createNormalizedMessage({
+                id: `${baseId}_compact`,
+                sessionId,
+                timestamp: ts,
+                provider: PROVIDER,
+                kind: 'text',
+                role: 'assistant',
+                content,
+                compact,
+            })];
+            if (raw.subtype === 'compact_boundary') {
+                // compact_metadata live, compactMetadata on disk.
+                const meta = raw.compact_metadata || raw.compactMetadata || {};
+                const trigger = meta.trigger === 'manual' ? 'manual' : 'auto';
+                const pre = Number(meta.pre_tokens ?? meta.preTokens) || 0;
+                const post = Number(meta.post_tokens ?? meta.postTokens) || 0;
+                const ms = Number(meta.duration_ms ?? meta.durationMs) || 0;
+                const said = ['Compacted', trigger];
+                if (pre) {
+                    said.push(post ? `${kitTokens(pre)} → ${kitTokens(post)} tokens`
+                        : `${kitTokens(pre)} tokens`);
+                }
+                if (ms) {
+                    said.push(kitFor(ms));
+                }
+                return kitRow(said.join(' · '), { phase: 'done', trigger, pre, post, ms });
+            }
+            // A status message reports several things, and compaction is the one
+            // with anything to show: 'requesting' and null are every other turn.
+            if (raw.status === 'compacting') {
+                return kitRow('Compacting conversation…', { phase: 'running' });
+            }
+            if (raw.compact_result === 'failed') {
+                return kitRow(`Compaction failed${raw.compact_error ? `: ${raw.compact_error}` : ''}`,
+                    { phase: 'failed', error: raw.compact_error || null });
+            }
+            return [];
+        }
+'''
+
+if 'KIT: compaction' in s:
+    print('compaction: already in place')
+    sys.exit(0)
+if s.count(OLD) != 1:
+    print('  MISSING: compaction (%d anchors) -- upstream moved it' % s.count(OLD),
+          file=sys.stderr)
+    sys.exit(1)
+open(path, 'w').write(s.replace(OLD, NEW, 1))
+print('compaction: applied')
+PY
+  then
+    if node --check "$CSP" >/dev/null 2>&1; then
+      rm -f "$CSP.prepatch"
+    else
+      mv "$CSP.prepatch" "$CSP"
+      echo "WARNING: the compaction patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$CSP.prepatch" "$CSP"
   fi
 fi
 

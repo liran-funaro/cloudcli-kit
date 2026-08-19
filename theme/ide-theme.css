@@ -172,3 +172,99 @@ code, pre, kbd, samp, .font-mono {
    Upstream caps the chat column with Tailwind max-w-* (2xl 672px .. 7xl
    1280px), wasting most of a wide display.                              */
 [class*="max-w-"] { max-width: 100% !important; }
+
+/* --- compaction rows -----------------------------------------------------
+   Patch 9 draws compaction in the transcript the way the CLI draws it: a dot,
+   a line of numbers, a bar while it runs, and the summary folded behind a
+   disclosure instead of dumped into the conversation as a 24 KB bubble. The
+   bar is indeterminate on purpose -- the CLI reports that compaction started
+   and, later, what it cost, never a percentage, so a filling bar would be
+   inventing one.
+
+   The look lives here rather than in the patch, so it can be retuned without
+   re-patching, and it is built from the app's own variables, so it follows
+   the theme with no dark-mode copy.                                       */
+.kit-compact { width: 100%; }
+
+.kit-compact-body {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  padding: .15rem 0;
+}
+
+.kit-compact-line {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .75rem;
+  line-height: 1.3;
+  color: hsl(var(--muted-foreground));
+}
+
+.kit-compact-dot {
+  flex: none;
+  width: .375rem;
+  height: .375rem;
+  border-radius: 9999px;
+  background: hsl(var(--muted-foreground) / .45);
+}
+.kit-compact-dot.is-running {
+  background: hsl(var(--primary));
+  animation: kit-compact-breathe 1.6s ease-in-out infinite;
+}
+.kit-compact-dot.is-failed { background: hsl(var(--destructive)); }
+
+.kit-compact-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: .7;
+}
+
+/* A third of the track, sliding across it: motion that says "working"
+   without claiming to know how far along it is.                          */
+.kit-compact-track {
+  width: 100%;
+  max-width: 18rem;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: hsl(var(--muted-foreground) / .2);
+}
+.kit-compact-fill {
+  width: 33%;
+  height: 100%;
+  border-radius: 9999px;
+  background: hsl(var(--primary));
+  animation: kit-compact-slide 1.5s ease-in-out infinite;
+}
+@keyframes kit-compact-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+@keyframes kit-compact-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .35; }
+}
+
+/* Closed, one dim word; open, what the CLI keeps behind ctrl+o. */
+.kit-compact-more > summary {
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+  font-size: .75rem;
+  color: hsl(var(--muted-foreground) / .85);
+}
+.kit-compact-more > summary::-webkit-details-marker { display: none; }
+.kit-compact-more > summary::before { content: "\25b8\a0"; }
+.kit-compact-more[open] > summary::before { content: "\25be\a0"; }
+.kit-compact-more > summary:hover { color: hsl(var(--foreground)); }
+
+.kit-compact-summary {
+  margin-top: .5rem;
+  max-height: 24rem;
+  overflow: auto;
+  padding: .75rem .9rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius, .5rem);
+  background: hsl(var(--muted) / .4);
+}
