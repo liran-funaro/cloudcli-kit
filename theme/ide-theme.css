@@ -175,11 +175,18 @@ code, pre, kbd, samp, .font-mono {
 
 /* --- compaction rows -----------------------------------------------------
    Patch 9 draws compaction in the transcript the way the CLI draws it: a dot,
-   a line of numbers, a bar while it runs, and the summary folded behind a
-   disclosure instead of dumped into the conversation as a 24 KB bubble. The
-   bar is indeterminate on purpose -- the CLI reports that compaction started
-   and, later, what it cost, never a percentage, so a filling bar would be
-   inventing one.
+   a line of numbers, a bar with a percentage beside it while it runs, and the
+   summary folded behind a disclosure instead of dumped into the conversation
+   as a 24 KB bubble.
+
+   The bar fills on the CLI's own curve -- 1-e^(-t/90) over elapsed seconds,
+   capped at 95% -- because that is all the CLI has either: nothing in the
+   stream reports real progress. It is an estimate in both windows, easing
+   toward a ceiling it never reaches, so a compaction that runs long never
+   reads as finished. Its width is written by the same one-second interval that
+   writes the elapsed reading, which is why the transition below lasts exactly
+   as long as one tick: the bar arrives at each number just as the next is
+   computed, and never appears to stall between them.
 
    The look lives here rather than in the patch, so it can be retuned without
    re-patching, and it is built from the app's own variables, so it follows
@@ -220,10 +227,17 @@ code, pre, kbd, samp, .font-mono {
   opacity: .7;
 }
 
-/* A third of the track, sliding across it: motion that says "working"
-   without claiming to know how far along it is.                          */
+/* Bar and percentage on a line of their own, where the CLI puts them: under
+   the sentence, the number dim and to the right of the track.             */
+.kit-compact-bar {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .75rem;
+  color: hsl(var(--muted-foreground));
+}
 .kit-compact-track {
-  width: 100%;
+  flex: 1 1 auto;
   max-width: 18rem;
   height: 2px;
   overflow: hidden;
@@ -231,19 +245,30 @@ code, pre, kbd, samp, .font-mono {
   background: hsl(var(--muted-foreground) / .2);
 }
 .kit-compact-fill {
-  width: 33%;
+  width: 0;
   height: 100%;
   border-radius: 9999px;
   background: hsl(var(--primary));
-  animation: kit-compact-slide 1.5s ease-in-out infinite;
+  transition: width 1s linear;
 }
-@keyframes kit-compact-slide {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(300%); }
+/* Wide enough for three digits from the start, so the track's right edge does
+   not step left when the number does.                                     */
+.kit-compact-pct {
+  flex: none;
+  min-width: 2.4em;
+  font-variant-numeric: tabular-nums;
+  opacity: .7;
 }
+
 @keyframes kit-compact-breathe {
   0%, 100% { opacity: 1; }
   50%      { opacity: .35; }
+}
+
+/* Asked for stillness, keep the numbers and drop the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .kit-compact-dot.is-running { animation: none; }
+  .kit-compact-fill { transition: none; }
 }
 
 /* Closed, one dim word; open, what the CLI keeps behind ctrl+o. */

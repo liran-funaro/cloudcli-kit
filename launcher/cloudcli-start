@@ -692,9 +692,17 @@ NOTIF = re.compile(r'(\w+)\.isTaskNotification\?(\w+)\.jsx\("div",\{className:"w
 MD = kit_names(r'\w+\.jsx\((\w+),\{className:"prose prose-sm max-w-none font-serif '
                r'dark:prose-invert",children:String\(')
 
-# The elapsed reading is derived from the row's own timestamp attribute rather
-# than a captured start, so a row that re-renders (or a second tab) shows the
-# same number, and the interval needs no bookkeeping to find its nodes.
+# The elapsed reading and the percentage are both derived from the row's own
+# timestamp attribute rather than from a captured start, so a row that
+# re-renders (or a second tab) shows the same numbers, and the interval needs no
+# bookkeeping to find its nodes.
+#
+# The percentage is the CLI's, formula and all: min(95, round((1-e^(-t/90))*100))
+# over elapsed seconds. Nothing anywhere reports real progress -- the CLI draws
+# this same estimate under its spinner, a curve easing toward a ceiling of 95%
+# it never passes, so a compaction that runs long never reads as finished.
+# Copying it rather than inventing a curve keeps the two windows telling the
+# same story.
 TICK = (
     'ref:_e=>{if(!_e)return;'
     'const _t=()=>{const _l=document.querySelectorAll("[data-kit-since]");'
@@ -702,7 +710,11 @@ TICK = (
     'const _n=Date.now();'
     'for(const _x of _l){const _s=Date.parse(_x.getAttribute("data-kit-since")||"");'
     'if(!_s)continue;const _d=Math.max(0,Math.round((_n-_s)/1e3));'
-    '_x.textContent=_d<60?_d+"s":Math.floor(_d/60)+"m "+_d%60+"s"}};'
+    'const _p=Math.min(95,Math.round((1-Math.exp(-_d/90))*100));'
+    'const _a=_x.querySelector(".kit-compact-elapsed");'
+    'if(_a)_a.textContent=_d<60?_d+"s":Math.floor(_d/60)+"m "+_d%60+"s";'
+    'const _c=_x.querySelector(".kit-compact-pct");if(_c)_c.textContent=_p+"%";'
+    'const _f=_x.querySelector(".kit-compact-fill");if(_f)_f.style.width=_p+"%"}};'
     '_t();if(!window.__kitTick)window.__kitTick=setInterval(_t,1e3)},'
 )
 
@@ -743,7 +755,12 @@ def kit_compact_row(m):
     """One branch ahead of the task-notification row, modelled on it."""
     e, x = m.group(1), m.group(2)
     return (
-        '%(e)s.compact?%(x)s.jsx("div",{className:"kit-compact",children:'
+        # The ticked node is the row itself, and only while it runs: the
+        # interval looks for [data-kit-since] and stops when none is left, so a
+        # finished row must not carry it.
+        '%(e)s.compact?%(x)s.jsx("div",{className:"kit-compact",'
+        '...(%(e)s.compact.phase==="running"'
+        '?{%(tick)s"data-kit-since":%(e)s.timestamp}:{}),children:'
         '%(x)s.jsxs("div",{className:"kit-compact-body",children:['
         '%(x)s.jsxs("div",{className:"kit-compact-line",children:['
         '%(x)s.jsx("span",{className:"kit-compact-dot"+('
@@ -751,11 +768,15 @@ def kit_compact_row(m):
         '%(e)s.compact.phase==="failed"?" is-failed":"")}),'
         '%(x)s.jsx("span",{children:%(e)s.content||"Compacted"}),'
         '%(e)s.compact.phase==="running"?%(x)s.jsx("span",'
-        '{className:"kit-compact-elapsed","data-kit-since":%(e)s.timestamp,'
-        '%(tick)schildren:"0s"}):null]}),'
-        '%(e)s.compact.phase==="running"?%(x)s.jsx("div",'
-        '{className:"kit-compact-track",children:%(x)s.jsx("div",'
-        '{className:"kit-compact-fill"})}):null,'
+        '{className:"kit-compact-elapsed",children:"0s"}):null]}),'
+        # Bar and percentage on their own line under the sentence, as the CLI
+        # puts them under its spinner. Both start where the first tick will
+        # find them a moment later, not at a number they never showed.
+        '%(e)s.compact.phase==="running"?%(x)s.jsxs("div",'
+        '{className:"kit-compact-bar",children:['
+        '%(x)s.jsx("div",{className:"kit-compact-track",children:%(x)s.jsx("div",'
+        '{className:"kit-compact-fill"})}),'
+        '%(x)s.jsx("span",{className:"kit-compact-pct",children:"0%%"})]}):null,'
         '%(e)s.compactSummary?%(x)s.jsxs("details",{className:"kit-compact-more",'
         'children:[%(x)s.jsx("summary",{children:"full summary"}),'
         '%(x)s.jsx("div",{className:"kit-compact-summary",children:%(x)s.jsx(%(md)s,'

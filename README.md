@@ -10,7 +10,7 @@ spinner, the session menu — plus the project each one belongs to. Each model d
 priced, and pruned in the model menu. The CLI's own commands — `/compact` among them — in the
 composer's command menu. Enter for a newline, ⌘/Ctrl+Enter to send. A Stop that always stops,
 and a message typed mid-turn steering the turn it lands in. Compaction drawn where it happens —
-a bar while it runs, then what it cost, with the summary folded behind a disclosure instead of
+a bar and a percentage while it runs, then what it cost, with the summary folded behind a disclosure instead of
 dropped into the conversation. A Cost tab showing what the proxy has billed. One command:
 `./install.sh`.
 
@@ -172,7 +172,8 @@ mentioned at all:
   number survives a re-render instead of blinking back to a dash. With no report on disk it
   reads `today —`, and says why in its tooltip.
 - **Compaction, drawn where it happened.** The browser half of [patch
-  9](#compaction-said-out-loud): a dot, one line of numbers, a bar while it runs, and the
+  9](#compaction-said-out-loud): a dot, one line of numbers, a bar with the CLI's own
+  percentage while it runs, and the
   summary folded behind *full summary* — the disclosure standing in for the CLI's ctrl+o.
   Two rows are folded into one on the way: the boundary and the summary that follows it are
   separate records, and a summary sitting alone (an older session, compacted before the CLI
@@ -347,7 +348,7 @@ left in the conversation is the summary itself: a 24 KB assistant bubble, arrivi
 in front of it to say what it is or where it came from.
 
 Two records, one row. The status the CLI sends when it starts compacting becomes a row that says
-so, with a bar; the boundary it sends when it is done becomes a row with the numbers — and the
+so, with a bar and a percentage; the boundary it sends when it is done becomes a row with the numbers — and the
 numbers are worth having, because a compaction is the most expensive thing a long session does
 without being asked:
 
@@ -362,9 +363,23 @@ metadata is spelled `compact_metadata` in the live stream and `compactMetadata` 
 transcript, so both are read — one branch serves the live turn and the history refetch that
 replaces it, because upstream normalizes both through the same function.
 
-There is no percentage anywhere in that stream: the CLI reports that compaction started and,
-much later, what it cost. So the bar slides rather than fills, and an elapsed counter ticks
-beside it. Claiming to know how far along a compaction is would be inventing it.
+The percentage is an estimate, and it is the CLI's estimate. Nothing in the stream reports real
+progress: the CLI is told that compaction started and, much later, what it cost — exactly what
+CloudCLI is told. So the number under its spinner is a curve over elapsed time,
+`min(95, round((1 - e^(-t/90)) * 100))`, and that is what fills the bar here, lifted formula and
+all out of the CLI binary. It eases toward a ceiling of 95% it never passes, so a compaction that
+runs long never reads as finished, and the elapsed counter runs beside it as the one reading that
+is not a guess:
+
+```
+● Compacting conversation…                                    2m 56s
+  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬░░░░  86%
+```
+
+Copying the curve rather than inventing one is the whole point: the same compaction reads the
+same in both windows. One 1-second interval drives every row on the page, and both numbers and
+the width come from the row's own timestamp — so a re-render, or a second tab opened halfway
+through, shows the same figures — and it stops itself as soon as no row is left to update.
 
 Not gated on `CLOUDCLI_STEER`, and nothing to turn off — it adds a line to the transcript's own
 account of itself and takes nothing away. Like the patches above it, the server half lands on
