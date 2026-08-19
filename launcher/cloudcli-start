@@ -853,30 +853,36 @@ fi
 # patch 3 they land on the next server start rather than the next reload.
 #
 # Patch 4 (always on) fixes a hang. Stop calls the SDK's interrupt(), which is a
-# control request WRITTEN TO THE CLI'S STDIN -- and for a single-user-turn query,
-# which is every text-only turn here, the SDK closes stdin at the first `result`.
-# A CLI that outlives its own result therefore never answers: the promise never
-# settles, the session is never removed (so every later Stop wedges on the same
-# session), the abort handler never returns, and the client never receives its
-# terminal complete. The UI sits on "processing" and Esc does nothing until the
-# server is restarted. Give the control request two seconds, then close the
-# transport instead -- which needs no cooperation from the child.
+# control request WRITTEN TO THE CLI'S STDIN, so it is only answered while the
+# CLI is alive and reading. Usually it is -- 1.37.2 holds stdin open for the
+# turn, and for up to half an hour past it when the turn left background work
+# running -- but a child that has already wound down, or one too busy to read,
+# leaves the promise unsettled: the session is never removed (so every later
+# Stop wedges on the same session), the abort handler never returns, and the
+# client never receives its terminal complete. The UI sits on "processing" and
+# Esc does nothing until the server is restarted. Give the control request two
+# seconds, then close the transport instead -- which needs no cooperation from
+# the child.
 #
-# Patch 5 (CLOUDCLI_STEER=1) is the other side of the same coin: because stdin
-# is open while the turn runs, a user frame pushed into it is picked up at the
-# next agent-loop boundary, in the SAME turn. So a message typed mid-run can
-# steer the run instead of queueing behind it. Nothing about how the turn was
-# started has to change, which is what makes this small.
+# Patch 5 (CLOUDCLI_STEER=1) rides that same open stdin. 1.37.2 sends every turn
+# as a stream that parks when it runs out of messages (createHeldPromptStream),
+# precisely so the pipe stays open. A user frame pushed into the park is read at
+# the CLI's next agent-loop boundary, in the SAME turn -- so a message typed
+# mid-run steers the run instead of queueing behind it. All this patch adds is a
+# queue on that park and a route to reach it; nothing about how a turn is
+# started has to change, which is what makes it small.
+#
+# (Before 1.37.2 the same trick hung off the SDK's string-prompt path, which
+# left stdin open by omission, and only for turns without attachments. Upstream
+# now holds it open on purpose, for every turn, and releases it on purpose --
+# so steering follows a lifetime the server states rather than one it inferred,
+# and a push after the release is refused rather than dropped into a closed
+# pipe.)
 #
 # The CLI applies such a frame but never writes it down, and CloudCLI's history
 # IS the CLI's transcript -- so patch 5 also appends the line there itself, in
 # the shape a user turn has. Without that the message vanishes on the next
 # reload, and the CLI resumes a conversation with no record of the redirection.
-#
-# The one trap: streamInput() calls endInput() when its iterable ENDS, closing
-# stdin -- which would take interrupt(), and with it Stop, down with it. The
-# queue therefore never ends on its own; it is closed from removeSession(),
-# which is reached only on completion, error and abort.
 #
 # Patch 5 is all-or-nothing across the three files by construction: a facade
 # naming a function that failed to be inserted is a ReferenceError at import,
@@ -929,9 +935,9 @@ STOP = (                                                  # (old, new, label)
     '        // Call interrupt() on the query instance\n'
     '        await session.instance.interrupt();\n',
     '        // Call interrupt() on the query instance. KIT: it is a control\n'
-    '        // request written to the CLI\'s stdin, which the SDK has already\n'
-    '        // closed if this run reached its first result -- then it never\n'
-    '        // answers and Stop wedges for good. Wait, then stop asking.\n'
+    '        // request written to the CLI\'s stdin, so it is answered only\n'
+    '        // while the child is alive and reading -- one that has wound down\n'
+    '        // never answers, and Stop wedges for good. Wait, then stop asking.\n'
     '        const kitInterrupt = await Promise.race([\n'
     '            session.instance.interrupt().then(() => \'done\', (error) => error),\n'
     '            new Promise((resolve) => setTimeout(() => resolve(\'timeout\'), 2000)),\n'
@@ -953,54 +959,13 @@ STOP = (                                                  # (old, new, label)
 # Raw: this is JS source, so a backslash in it belongs to the JS ('\n' is a
 # newline the emitted code writes, not one in this string).
 STEER_BLOCK = r'''// KIT: mid-turn steering -----------------------------------------------------
-// The SDK spawns the CLI with --input-format stream-json unconditionally, and
-// the string-prompt path writes one user frame without calling endInput(), so
-// stdin is still open while the turn runs. A user frame pushed into it is read
-// at the next agent-loop boundary -- the same turn, no restart, no resume.
-const kitSteerable = new WeakSet(); // runs whose stdin is still writable
-const kitInboxes = new WeakMap(); // run -> its push queue
-let kitPromptWasString = false;
-function kitTapPrompt(prompt) {
-    // A string prompt leaves stdin open. The generator payload (a turn carrying
-    // attachments) ends, and streamInput() closes stdin behind it, so those
-    // runs cannot be steered -- and must not be, or the message would vanish
-    // into a closed pipe. Read at the query() call site, with no await between
-    // here and the kitSteerable.add() below, so the flag cannot drift to
-    // another run.
-    kitPromptWasString = typeof prompt === 'string';
-    return prompt;
-}
-function kitPushQueue() {
-    // Yields on push and ends only when closed. Ending it would call
-    // endInput() and close the stdin that interrupt() needs.
-    const items = [];
-    let wake = null;
-    let closed = false;
-    return {
-        push(value) { items.push(value); wake?.(); wake = null; },
-        close() { closed = true; wake?.(); wake = null; },
-        async *[Symbol.asyncIterator]() {
-            for (;;) {
-                if (items.length) {
-                    yield items.shift();
-                    continue;
-                }
-                if (closed) {
-                    return;
-                }
-                await new Promise((resolve) => { wake = resolve; });
-            }
-        },
-    };
-}
-function kitCloseInbox(instance) {
-    const inbox = instance && kitInboxes.get(instance);
-    if (!inbox) {
-        return;
-    }
-    kitInboxes.delete(instance);
-    inbox.close();
-}
+// Every turn is sent as a stream that parks once its messages are out, so the
+// CLI's stdin stays open for as long as the run does. A user frame pushed into
+// that park is read at the next agent-loop boundary -- the same turn, no
+// restart, no resume. createHeldPromptStream hands out the push per run; it
+// refuses once that run's stream has been released, so nothing is ever written
+// into a closed pipe.
+const kitPushers = new WeakMap(); // run -> push a frame onto its held stdin
 /**
  * KIT: writes a steered line into the CLI's own transcript.
  *
@@ -1095,30 +1060,26 @@ function injectIntoClaudeSDKSession(sessionId, text) {
     if (!instance || session.status !== 'active') {
         return false;
     }
-    if (!kitSteerable.has(instance) || typeof instance.streamInput !== 'function') {
+    const push = kitPushers.get(instance);
+    if (!push) {
         return false;
     }
     if (typeof text !== 'string' || !text.trim()) {
         return false;
     }
-    let inbox = kitInboxes.get(instance);
-    if (!inbox) {
-        inbox = kitPushQueue();
-        kitInboxes.set(instance, inbox);
-        // Settles only once the queue closes. A rejection means the CLI is
-        // already gone, which the run loop is about to notice by itself.
-        instance.streamInput(inbox).catch((error) => {
-            console.warn(`[KIT] steering channel closed for ${sessionId}:`, error?.message || error);
-        });
+    const timestamp = new Date().toISOString();
+    // Same shape the turn itself was sent in. A refusal means the run's stdin is
+    // already released -- the CLI is winding down and the frame would go
+    // nowhere, so report failure rather than record a line nothing acted on.
+    if (!push({
+        type: 'user',
+        message: { role: 'user', content: text },
+        parent_tool_use_id: null,
+        timestamp,
+    })) {
+        return false;
     }
     console.log(`[KIT] steering ${sessionId} mid-turn (${text.length} chars)`);
-    const timestamp = new Date().toISOString();
-    inbox.push({
-        type: 'user',
-        session_id: '',
-        message: { role: 'user', content: [{ type: 'text', text }] },
-        parent_tool_use_id: null,
-    });
     // Not awaited: the run already has the message, and whether it also ends up
     // in the history must not decide whether steering reports success.
     kitRecordSteer(sessionId, text, timestamp).catch((error) => {
@@ -1142,25 +1103,53 @@ RUNTIME = [
     ('steering channel',
      SESSION_MAP,
      STEER_BLOCK + SESSION_MAP, 1),
-    ('steerable runs',
-     '                prompt: await createPrompt(),\n',
-     '                prompt: kitTapPrompt(await createPrompt()),\n',
-     2),                            # the hooked call and its hookless retry
-    ('steerable marker',
-     '        // Track the query instance for abort capability\n',
-     '        if (kitPromptWasString) {\n'
-     '            kitSteerable.add(queryInstance);\n'
+    ('steering queue',                  # a queue on the stream the turn rides in on
+     '    let release;\n'
+     '    const held = new Promise((resolve) => { release = resolve; });\n',
+     '    let release;\n'
+     '    let released = false;\n'
+     '    const held = new Promise((resolve) => '
+     '{ release = () => { released = true; resolve(); }; });\n'
+     '    // KIT: frames steered in while the stream is parked below. Refused\n'
+     '    // once it has been released: the CLI is winding down by then, and a\n'
+     '    // frame written to it would go into a closed pipe.\n'
+     '    const steered = [];\n'
+     '    let wake = null;\n'
+     '    const push = (message) => {\n'
+     '        if (released) {\n'
+     '            return false;\n'
      '        }\n'
+     '        steered.push(message);\n'
+     '        wake?.();\n'
+     '        wake = null;\n'
+     '        return true;\n'
+     '    };\n', 1),
+    ('steering park',                   # ... and the park itself passes them on
+     '        await held;\n'
+     '    })();\n'
+     '    return { stream, release };\n',
+     '        // KIT: with nothing steered in this awaits `held` and returns,\n'
+     '        // which is what upstream\'s bare `await held` did. Draining\n'
+     '        // before the check is what keeps a frame pushed in the same tick\n'
+     '        // as the release from being dropped.\n'
+     '        for (;;) {\n'
+     '            while (steered.length) {\n'
+     '                yield steered.shift();\n'
+     '            }\n'
+     '            if (released) {\n'
+     '                return;\n'
+     '            }\n'
+     '            await Promise.race([held, new Promise((resolve) => { wake = resolve; })]);\n'
+     '        }\n'
+     '    })();\n'
+     '    return { stream, release, push };\n', 1),
+    ('steering pusher',
+     '        // Track the query instance for abort capability\n',
+     '        // KIT: the pusher belongs to the stream this run is really\n'
+     '        // reading -- taken after the hookless retry, which builds a second\n'
+     '        // one and abandons the first.\n'
+     '        kitPushers.set(queryInstance, heldPrompt.push);\n'
      '        // Track the query instance for abort capability\n', 1),
-    ('steering cleanup',
-     'function removeSession(sessionId) {\n'
-     '    activeSessions.delete(sessionId);\n',
-     'function removeSession(sessionId) {\n'
-     '    // KIT: every caller of this means the run is over or being killed --\n'
-     '    // completion, error, abort -- which is exactly when the steering queue\n'
-     '    // may end. Closing it earlier would close stdin under a live run.\n'
-     '    kitCloseInbox(activeSessions.get(sessionId)?.instance);\n'
-     '    activeSessions.delete(sessionId);\n', 1),
     ('steering export',
      'export const claudeRuntime = {\n'
      '    run: queryClaudeSDK,\n'
