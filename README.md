@@ -809,6 +809,12 @@ never edits.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). CloudCLI UI itself is AGPL-3.0; nothing here includes or
-modifies its source, and the generated accent rules are derived on your own machine at
-start-up and never distributed.
+MIT — see [LICENSE](LICENSE) — for what this repository contains: the launcher, the stylesheet,
+the report script, the plugin and the docs.
+
+CloudCLI UI itself is AGPL-3.0, and no copy of it is distributed here. Two things are worth
+stating plainly rather than implying, since both are how the kit works at all: the launcher
+**quotes verbatim fragments of CloudCLI's source** — the anchor each patch matches on, a few
+lines apiece — and on every start it **edits the installed package in place** on the machine it
+runs on. The generated accent rules are derived there too, and never distributed. If you
+redistribute the kit itself, that quoting is the part to take a view on.
