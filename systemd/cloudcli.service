@@ -8,7 +8,8 @@ Environment=HOST=127.0.0.1
 Environment=PORT=3001
 # Mid-turn steering (patch 5) is on by whatever the launcher defaults to, which
 # since 2026-08-13 is on. To reverse it, add the line below and restart -- the
-# launcher un-applies all eight of its server edits when the flag is 0. An
+# launcher un-applies every server edit that belongs to it, and to the half of
+# patch 10 that rides on it, when the flag is 0. An
 # Environment=CLOUDCLI_STEER=1 line used to live here and became a line that
 # said nothing, which is why the knob is now named only where it does something.
 # Environment=CLOUDCLI_STEER=0

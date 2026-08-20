@@ -1,6 +1,6 @@
 # cloudcli-kit
 
-Personal customisations for [CloudCLI UI](https://github.com/siteboon/claudecodeui) — a
+Opinionated customisations for [CloudCLI UI](https://github.com/siteboon/claudecodeui) — a
 stylesheet, a launcher that re-applies it and everything below on every start so a package
 upgrade cannot silently revert them, and a Cost tab for the LiteLLM proxy behind it.
 
@@ -56,10 +56,55 @@ upgrading is `npm i -g @cloudcli-ai/cloudcli` and one launcher run. (Upstream sh
 release roughly every 4–5 days, and does not commit `dist/`, so a fork would mean a weekly
 merge *plus* a vite + tsc build with two native modules.)
 
-## Install
+## What this needs
+
+| | |
+|---|---|
+| **Node.js 20+ and npm** | CloudCLI is an npm package; the launcher installs it for you if it is missing |
+| **A logged-in `claude` CLI on `PATH`** | CloudCLI spawns it per turn and resolves it from `PATH` (`CLAUDE_CLI_PATH` overrides). Install it from [claude.com/claude-code](https://claude.com/claude-code) and run `claude` once to log in |
+| **bash and python3** | the launcher is bash; its patches are python |
+| **curl and jq** | the Cost tab's report script only — `./install.sh --no-cost` skips it |
+| **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
+
+Written against **CloudCLI 1.37.2** and **Claude Code 2.1.235**. The bundle and server patches
+are anchored on text upstream chose, so a later release can move an anchor: the launcher then
+reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
+untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
+CloudCLI; it patches the installed package in place, on every start.
+
+## Deploy
+
+Running it on a **remote dev box** and reaching it from a laptop is the case two longer guides
+cover end to end — the security model, the service, verification, the tunnel, upgrades and
+troubleshooting:
+
+- [**Claude Code Web UI on a Remote Server**](docs/remote-server.md) — why a third-party UI at
+  all when your access is an LLM gateway, what CloudCLI can reach on the box, keeping it on
+  loopback, and running it under systemd.
+- [**Remote Dev Server Browser Access over SSH**](docs/browser-over-ssh.md) — one SSH SOCKS
+  proxy and a small Chrome extension, so the browser uses the server's own hostname and every
+  loopback port works without a tunnel per service.
+
+The short version follows.
+
+### 1. CloudCLI itself
 
 ```bash
-git clone https://github.com/<you>/cloudcli-kit.git
+npm install -g --prefix ~/.npm-global @cloudcli-ai/cloudcli
+```
+
+Or skip it: `cloudcli-start` installs the package into the same prefix on its first run if it
+is not there.
+
+**Mind the prefix.** The launcher, its patches and the Cost report all address one install:
+`$CLOUDCLI_PREFIX`, default `~/.npm-global`. If your `~/.npmrc` sets a different `prefix=`,
+a bare `npm install -g` upgrades a copy nothing runs — pass `--prefix` explicitly, or point
+`CLOUDCLI_PREFIX` at wherever your install lives.
+
+### 2. The kit
+
+```bash
+git clone https://github.com/liran-funaro/cloudcli-kit.git
 cd cloudcli-kit
 ./install.sh
 ```
@@ -73,8 +118,88 @@ That seeds one file and installs the launcher, the report script and the Cost ta
 ~/.claude-code-ui/plugins/cost/    that tab
 ```
 
-Nothing is restarted, so it is safe to run while a session is in progress; reload the
-browser to see the result.
+Nothing is restarted, so it is safe to run while a session is in progress; reload the browser
+to see the result. `--no-cost` leaves the tab out, `--no-apply` installs the files without
+touching the package, and `--force` replaces a stylesheet you have edited (dating the old one
+first). Add `~/bin` to `PATH` if it is not there.
+
+### 3. Run it
+
+```bash
+~/bin/cloudcli-start            # HOST=127.0.0.1 PORT=3001 unless you set them
+```
+
+It patches, prints what it applied, and execs the server. Open
+[http://127.0.0.1:3001](http://127.0.0.1:3001) and create the login CloudCLI asks for on first
+run — that account lives in `~/.cloudcli/auth.db`, which is CloudCLI's, not this kit's.
+
+**Keep it on loopback.** CloudCLI runs Claude Code with your credentials and your filesystem;
+the unit below binds `127.0.0.1` deliberately, and reaching it from elsewhere should mean an
+SSH tunnel rather than a wider `HOST`.
+
+### 4. Under systemd, optionally
+
+```bash
+cp systemd/cloudcli.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now cloudcli
+loginctl enable-linger "$USER"          # so it keeps running after you log out
+```
+
+The unit is a copy, not something `install.sh` puts in place: a unit file is yours, and
+overwriting one is not a launcher's business. It runs the launcher through a login shell, so
+whatever your profile exports (gateway URL, tokens, `PATH`) is what the server and the CLI it
+spawns will see.
+
+### 5. The Cost tab, if you run a LiteLLM proxy
+
+The tab frames a page that `cloudcli-cost` writes; the script needs two things in its
+environment and nothing else:
+
+```bash
+export LITELLM_BASE_URL=https://your-proxy.example.com   # or ANTHROPIC_BASE_URL
+export LITELLM_TOKEN=<your-virtual-key>                  # or ANTHROPIC_AUTH_TOKEN
+~/bin/cloudcli-cost                                      # writes the page once
+```
+
+Then enable **Cost** in Settings → Plugins. For a report that refreshes itself:
+
+```bash
+cp systemd/cloudcli-cost.service systemd/cloudcli-cost.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now cloudcli-cost.timer
+```
+
+No proxy, no token, or a proxy that refuses those endpoints: the page says so and the rest of
+the kit is unaffected. `LITELLM_TOKEN_FILE` reads the key from a file instead, and
+`LITELLM_TEAM_ID` picks the team when the key belongs to more than one.
+
+### Updating
+
+```bash
+npm install -g --prefix ~/.npm-global @cloudcli-ai/cloudcli   # CloudCLI
+git -C cloudcli-kit pull && cloudcli-kit/install.sh           # the kit
+```
+
+An upgrade replaces the files the kit patches, which is the whole reason the launcher patches
+on every start rather than once — restart the server and it is all back. Kit updates work the
+same way: every start re-patches from the copies the package shipped, so the launcher's own
+edits can change between versions without stacking up.
+
+### Going back to upstream
+
+Every layer is reversible without reinstalling anything:
+
+```bash
+CLOUDCLI_FRONTEND=0 ~/bin/cloudcli-start    # upstream's bundle, untouched
+CLOUDCLI_STEER=0 ~/bin/cloudcli-start       # drop the steering and held-run edits
+rm ~/.config/cloudcli/ide-theme.css         # un-link the stylesheet on the next start
+```
+
+And to remove the kit altogether: delete `~/bin/cloudcli-start`, `~/bin/cloudcli-cost` and
+`~/.claude-code-ui/plugins/cost/`, then reinstall the package (or copy each
+`<file>.kitorig` in `dist-server/` back over its file) and start `~/.npm-global/bin/cloudcli`
+directly.
 
 ## The retired Recent tab
 
@@ -518,8 +643,8 @@ and are what a cap is enforced against: those are the budget. The **ledger**
 (`/user/daily/activity`, `/team/daily/activity`) aggregates per UTC day and is the
 only source for a per-day or per-member figure. Summing the ledger from the cycle's
 start lands a few percent under the counter, and no boundary reconciles them — tested
-across a week of candidate start dates, where my own sum was identical for three
-consecutive starts while the counter sat $58 above all of them. So counters answer
+across a week of candidate start dates, where one key's ledger sum came out identical for
+three consecutive starts while its counter sat $58 above all of them. So counters answer
 *how much of the budget is gone*, the ledger answers *where it went*, and each table
 says which it is reading.
 
@@ -548,8 +673,8 @@ endpoints, loses that section and nothing else.
 Per *member* takes a match, because the ledger names a key by alias and never by
 owner. The rule is narrow and stated on the page: the alias up to its first
 separator, against the email's local part or that part's first dot-segment, and only
-where exactly one member matches — which here resolves 14 of 26 aliases, and folds
-`Liran`, `Liran-Mac` and `Liran - Full` into one row. An alias nothing matches
+where exactly one member matches — on the proxy this was written against that resolves 14 of
+26 aliases, folding `Ada`, `Ada-Mac` and `Ada - Full` into one row. An alias nothing matches
 **stays its own row**, so the member column reads as an email when it is a person
 and as an alias when it is a guess declined. Attributing someone's spend to whoever's
 name looked closest would be worse than leaving it unattributed.
@@ -671,6 +796,8 @@ never edits.
 - Delete `~/.config/cloudcli/ide-theme.css` and the next launcher run cleanly un-links it.
   Earlier versions served a Recent list of their own — a floating pill, then a plugin tab —
   and both scripts clean up after the pill on a machine that ran it.
+- [`docs/`](docs) holds the two deployment guides linked above; they describe the same launcher
+  this repository carries rather than a copy of it, so there is one place for each fact.
 - [`systemd/cloudcli.service`](systemd/cloudcli.service) is the user unit this is deployed
   under, kept here as a copy rather than installed by `install.sh` — putting a unit in place
   is enabling and starting a service, which is a decision, not a file operation. Copy it to
