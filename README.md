@@ -11,7 +11,8 @@ priced, and pruned in the model menu. The CLI's own commands — `/compact` amon
 composer's command menu. Enter for a newline, ⌘/Ctrl+Enter to send. A Stop that always stops,
 and a message typed mid-turn steering the turn it lands in. Compaction drawn where it happens —
 a bar and a percentage while it runs, then what it cost, with the summary folded behind a disclosure instead of
-dropped into the conversation. A Cost tab showing what the proxy has billed. One command:
+dropped into the conversation. A turn that ends waiting on background work says so, counts down,
+and takes your next message into the same process instead of killing what it was waiting for. A Cost tab showing what the proxy has billed. One command:
 `./install.sh`.
 
 ## Why a launcher and not a plugin
@@ -98,7 +99,7 @@ switch beside it in Settings → Plugins, and removing either is yours to do.
 
 Three are things the app already almost does; one is a default worth flipping; one is a
 list keeping itself current; one is a menu that never listed what the CLI can do; one puts a
-number on the page that was only ever a command away; one draws something the app never
+number on the page that was only ever a command away; one draws two things the app never
 mentioned at all:
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
@@ -171,9 +172,11 @@ mentioned at all:
   — and every later render re-fills the node from what was already fetched, which is why the
   number survives a re-render instead of blinking back to a dash. With no report on disk it
   reads `today —`, and says why in its tooltip.
-- **Compaction, drawn where it happened.** The browser half of [patch
-  9](#compaction-said-out-loud): a dot, one line of numbers, a bar with the CLI's own
-  percentage while it runs, and the
+- **Compaction and waiting, drawn where they happen.** The browser half of [patch
+  9](#compaction-said-out-loud) and [patch 10](#waiting-said-out-loud) — one edit each in the
+  mapper and the row renderer, shared because the two rows are the same shape: a dot, a
+  sentence, a number, a bar, a disclosure. A compaction gets the CLI's own percentage while it
+  runs, and the
   summary folded behind *full summary* — the disclosure standing in for the CLI's ctrl+o.
   Two rows are folded into one on the way: the boundary and the summary that follows it are
   separate records, and a summary sitting alone (an older session, compacted before the CLI
@@ -181,7 +184,13 @@ mentioned at all:
   compaction after it is dropped rather than drawn, so history never shows one that will
   never stop.
 
-  The look is not in the patch. It is `.kit-compact-*` in
+  A wait is the same row read the other way: the number counts **down** to a deadline the
+  server chose and the bar drains toward it, because unlike a compaction that deadline is a
+  real one. Behind its disclosure is what is being waited for, one line per task, from the
+  CLI's own list. Only the newest countdown survives the mapper, so history never shows a
+  clock that will never stop.
+
+  The look is not in the patch. It is `.kit-row-*` in
   [`theme/ide-theme.css`](theme/ide-theme.css), loaded after the app's own stylesheet and
   built from the app's variables — so it follows the theme with no dark-mode copy, and can be
   retuned without re-patching. The elapsed counter ticks from a `ref` callback for the same
@@ -215,7 +224,7 @@ way to tell the intended site from a coincidence — and the run says what it di
 ```
 frontend: 9/9 applied -- sidebar default, model description, ctrl+enter to send,
 send while running, conversation row, conversation refresh, cli commands, cost chip,
-compaction rows
+compaction and wait rows
 ```
 
 Nine because one of them, *send while running*, belongs to steering — described with it
@@ -322,19 +331,27 @@ omission and only for turns without attachments — so those turns had to be sni
 queue could never be allowed to end. Upstream now states the lifetime the patch used to infer,
 and all of that went away: every turn is steerable, attachments included.
 
+A message can also land when the turn is over but the process is still held open for its
+background work. That is not a steer — the run is idle, not mid-turn — and it takes a different
+route for a different reason: [see patch 10](#waiting-said-out-loud), which pushes it into the
+same parked stdin so the work being waited on survives.
+
 The browser half is one of the bundle substitutions: the composer's busy guard learns one
 condition, so a send during a run goes out instead of becoming a draft. It is still guarded on a
 global rather than compiled in, but the sense is now the escape hatch — `__cloudcliSteer = false`
 in the console puts a tab back on upstream's hold-it-back composer mid-session, with no restart.
 
 ```
-chat: applied stop always stops, steering history, steering channel, steering queue, steering
-park, steering pusher, steering export, steering passthrough, steering route
+chat: applied stop always stops, waiting ceiling, waiting env, waiting state, waiting expiry,
+waiting tasks, waiting hold, steering history, steering channel, steering queue, steering park,
+steering pusher, steering export, waiting resume, steering passthrough, steering route,
+waiting route
 [KIT] steering <session> mid-turn (32 chars)
 ```
 
-Eight steering edits across three server modules (the ninth line is Stop), so it is
-all-or-nothing by construction — a facade naming a function that failed to be inserted is a
+Ten steering-gated edits across three server modules — the eight above plus the two that take a
+message into a [held run](#waiting-said-out-loud); the rest of that line is Stop and patch 10's
+ungated half. So it is all-or-nothing by construction — a facade naming a function that failed to be inserted is a
 ReferenceError at import, i.e. a server that does not start. And every one of them is
 **reversed** by `CLOUDCLI_STEER=0`, back to byte-identical with what upstream shipped. Turning
 steering off is a restart, not a reinstall.
@@ -388,6 +405,99 @@ the next server start:
 ```
 compaction: applied
 ```
+
+## Waiting, said out loud
+
+```bash
+CLOUDCLI_STEER=0 cloudcli-start     # leaves the rows and the ceiling, drops the resume
+```
+
+A turn that ends with background work still running is the one case where CloudCLI shows a
+finished turn and means *still waiting*. Upstream does the hard part: at the turn's `result` it
+holds the CLI's stdin open — up to `BG_WAIT_CEILING_MS`, thirty minutes — precisely so a
+monitor or a background shell can finish and push a follow-up turn. But the client is told
+`complete` when that first `result` lands, and **nothing** is sent when the hold begins, when it
+runs out, or when the work reports back. A session waiting on a test looks exactly like a
+session that stopped.
+
+It is not a rare corner. In one long-running session here — eight days, 10,845 records — the
+agent handed work off to the background 46 times and **14 of those handoffs died silently**,
+each one ending the same way: a `Monitor` or a backgrounded `Bash`, a last assistant line, then
+a gap of 0 to 187 minutes, then a human typing *continue* and getting
+
+> No completion record was found for this background shell command from the previous session. It
+> may have been stopped (via the UI, Monitor timeout, or agent teardown — these leave no
+> transcript marker)…
+
+Three things were wrong, so patch 10 is three things.
+
+**The wait is drawn.** The hold, the report-back, and the expiry each become an ordinary
+assistant row, so the transcript says what the session is doing:
+
+```
+● Waiting on 1 background task · up to 42m                          41m 12s left
+  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  ▸ what it is waiting for
+
+● Background work reported back after 4m 12s
+● Background work never reported back · waited 42m
+```
+
+The countdown and the draining bar come from the deadline the server actually chose, and behind
+the disclosure is the CLI's own task list — `local_bash · run the suite` — so the row names what
+it is waiting for rather than just that it waits. Everything it says is in the message's
+`content`, so an unpatched bundle reads it as the sentence it is. These rows are live only: they
+are CloudCLI's account of its own hold, not records in the CLI's transcript, so a reload after
+the fact shows the transcript's version of events (the CLI's task notifications) rather than
+these.
+
+**The wait lasts as long as the work said it needs.** Thirty minutes is upstream's figure for
+work that never reports; it is not a figure the *tools* agree with. The same session armed
+monitors for 25, 30, 40 and 50 minutes — and a silent 50-minute monitor inside a 30-minute hold
+cannot report before its container is torn down. The kit reads what each turn armed (a
+`Monitor`'s `timeout_ms`, or the outer bound for a `persistent: true` one) and stretches that
+run's hold to it plus two minutes, bounded at an hour, and hands the CLI the same bound so the
+server's per-run figure is always the one that decides. The timer still measures *silence*, so a
+chatty monitor is never cut off at all.
+
+**Your next message goes into the same process.** This is the part that was destroying work.
+The registry marks a run `completed` when that first `complete` passes through it, so a message
+typed during the hold was not steering — it started a *new* run, and a new run supersedes the
+held one: `addSession` interrupts it and releases its stdin, and the CLI takes every background
+shell and monitor it was tracking down with it. Prodding a waiting session was the thing that
+guaranteed the answer *no completion record*.
+
+So the send path asks first. If the session has a run whose turn is over but whose process is
+still held, the message is pushed into that same parked stdin, and the turn it starts belongs to
+the new run — the loop swaps which writer it reports to, owes that run a `complete`, and the
+countdown row is replaced by
+
+```
+● Continued in the same process · 1 task still running
+```
+
+What the CLI does with a frame pushed into a parked stream is not inferred. A probe against
+2.1.235 armed a background shell, waited for the `result`, then pushed a second turn: the CLI ran
+it as an ordinary turn, **wrote it into its own transcript** (unlike a mid-turn steer, which
+patch 5 has to record itself, because there the CLI is busy rather than parked), and the shell
+armed by the turn before it survived and reported back afterwards, in a third turn. Three turns,
+one process, nothing lost.
+
+Steering already owns the pipe this needs, so the resume half is gated with it and the rows and
+the ceiling are not: `CLOUDCLI_STEER=0` leaves a session that still says what it is waiting for
+and still waits long enough, and goes back to superseding the process when you speak.
+
+```
+chat: applied stop always stops, waiting ceiling, waiting env, waiting state, waiting expiry,
+waiting tasks, waiting hold, steering history, steering channel, steering queue, steering park,
+steering pusher, steering export, waiting resume, steering passthrough, steering route,
+waiting route
+[KIT] <session> took a message into its held run (8 chars)
+```
+
+Two notes on what a resumed turn is not. It carries text only — a message with attachments still
+starts a fresh run, because the parked stream takes frames rather than uploads — and it runs with
+the model and effort its process was started with, so a model changed in the composer applies to
+the next *new* run, exactly as with a mid-turn steer.
 
 ## The Cost tab
 

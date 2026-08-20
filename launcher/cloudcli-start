@@ -659,28 +659,32 @@ if len(SETTINGS.findall(s)) == 1 and not re.search(r'\b__kitCost\w*\b', s):
 else:
     missing.append('cost chip (%d matches)' % len(SETTINGS.findall(s)))
 
-# (9) Compaction, drawn -- the browser half of patch 9. Its server half turns
-# the CLI's two compaction events into ordinary assistant rows carrying a
-# `compact` field, so even unpatched they read as one sentence in the
-# transcript. Here they become what the CLI shows: a bar while it runs, then a
-# line with the numbers, with the summary folded into it rather than dumped
-# into the conversation as a 24 KB bubble.
+# (9) Compaction and waiting, drawn -- the browser half of patches 9 and 10.
+# Their server halves turn events CloudCLI used to drop into ordinary assistant
+# rows carrying a `compact` or a `wait` field, so even unpatched they read as one
+# sentence in the transcript. Here they become what the CLI shows: for a
+# compaction a bar with its percentage, then the numbers with the summary folded
+# in; for a wait a countdown, a draining bar, and what is being waited for --
+# and then the one line saying how it ended.
 #
-# Two sites. The mapper from normalized messages to chat messages carries the
-# field, drops a "compacting" row once a later row says it finished (so history
-# never shows a bar that will never stop), and folds a summary row into the
-# boundary row ahead of it. The row renderer then draws the result -- one
-# branch, inserted ahead of the task-notification branch it is modelled on.
+# Two sites, one edit each. The mapper from normalized messages to chat messages
+# carries both fields and drops rows that a later row has overtaken: a
+# "compacting" bar once a boundary says it finished, and a "waiting" countdown
+# once any newer wait row exists (so only the live one counts down, and history
+# never shows a clock that will never stop). It also folds a compaction summary
+# into the boundary row ahead of it. The row renderer then draws the result --
+# two branches, inserted ahead of the task-notification branch they are modelled
+# on.
 #
-# The look is not here: it is .kit-compact-* in ide-theme.css, which is loaded
-# after the app's stylesheet, so it can be retuned without re-patching. The
-# only borrowed name is the markdown component, read from a site that names
-# itself -- and it is already called twice inside the function being patched,
-# so it cannot be a local shadowing it there.
+# The look is not here: it is .kit-row-* in ide-theme.css, which is loaded after
+# the app's stylesheet, so it can be retuned without re-patching. The only
+# borrowed name is the markdown component, read from a site that names itself --
+# and it is already called twice inside the function being patched, so it cannot
+# be a local shadowing it there.
 #
-# The elapsed counter ticks from a ref callback rather than state, like the cost
-# chip: one interval for the page, started by whichever row mounts first,
-# stopping itself as soon as no row is left to update.
+# The numbers tick from a ref callback rather than state, like the cost chip: one
+# interval for the page, started by whichever row mounts first, stopping itself
+# as soon as no row is left to update.
 MAP = re.compile(r'const (\w+)=\[\],(\w+)=new Map,(\w+)=new Set;'
                  r'for\(const (\w+) of (\w+)\)\4\.kind==="tool_use"&&\4\.toolId'
                  r'&&\3\.add\(\4\.toolId\),\4\.kind==="tool_result"&&\4\.toolId'
@@ -692,47 +696,58 @@ NOTIF = re.compile(r'(\w+)\.isTaskNotification\?(\w+)\.jsx\("div",\{className:"w
 MD = kit_names(r'\w+\.jsx\((\w+),\{className:"prose prose-sm max-w-none font-serif '
                r'dark:prose-invert",children:String\(')
 
-# The elapsed reading and the percentage are both derived from the row's own
-# timestamp attribute rather than from a captured start, so a row that
-# re-renders (or a second tab) shows the same numbers, and the interval needs no
-# bookkeeping to find its nodes.
+# Both readings come from the row's own timestamp attributes rather than from a
+# captured start, so a row that re-renders (or a second tab) shows the same
+# numbers, and the interval needs no bookkeeping to find its nodes.
 #
-# The percentage is the CLI's, formula and all: min(95, round((1-e^(-t/90))*100))
-# over elapsed seconds. Nothing anywhere reports real progress -- the CLI draws
-# this same estimate under its spinner, a curve easing toward a ceiling of 95%
-# it never passes, so a compaction that runs long never reads as finished.
-# Copying it rather than inventing a curve keeps the two windows telling the
-# same story.
+# A row with a deadline counts down to it and drains its bar, which is the honest
+# shape for a wait: the deadline is a real one the server chose. A row without
+# one is a compaction, and gets the CLI's own estimate --
+# min(95, round((1-e^(-t/90))*100)) over elapsed seconds, lifted formula and all
+# out of the CLI binary. Nothing reports real compaction progress: the CLI draws
+# that same curve under its spinner, easing toward a ceiling of 95% it never
+# passes, so a compaction that runs long never reads as finished. Copying it
+# rather than inventing a curve keeps the two windows telling the same story.
 TICK = (
     'ref:_e=>{if(!_e)return;'
     'const _t=()=>{const _l=document.querySelectorAll("[data-kit-since]");'
     'if(!_l.length){clearInterval(window.__kitTick);window.__kitTick=null;return}'
     'const _n=Date.now();'
     'for(const _x of _l){const _s=Date.parse(_x.getAttribute("data-kit-since")||"");'
-    'if(!_s)continue;const _d=Math.max(0,Math.round((_n-_s)/1e3));'
-    'const _p=Math.min(95,Math.round((1-Math.exp(-_d/90))*100));'
-    'const _a=_x.querySelector(".kit-compact-elapsed");'
-    'if(_a)_a.textContent=_d<60?_d+"s":Math.floor(_d/60)+"m "+_d%60+"s";'
-    'const _c=_x.querySelector(".kit-compact-pct");if(_c)_c.textContent=_p+"%";'
-    'const _f=_x.querySelector(".kit-compact-fill");if(_f)_f.style.width=_p+"%"}};'
+    'if(!_s)continue;const _u=Date.parse(_x.getAttribute("data-kit-until")||"");'
+    'const _d=Math.max(0,Math.round((_n-_s)/1e3));'
+    'const _p=_u?(_u>_s?Math.max(0,Math.min(100,Math.round((_u-_n)/(_u-_s)*100))):0)'
+    ':Math.min(95,Math.round((1-Math.exp(-_d/90))*100));'
+    'const _r=_u?Math.max(0,Math.round((_u-_n)/1e3)):_d;'
+    'const _a=_x.querySelector(".kit-row-num");'
+    'if(_a)_a.textContent=(_r<60?_r+"s":Math.floor(_r/60)+"m "+_r%60+"s")+(_u?" left":"");'
+    'const _c=_x.querySelector(".kit-row-pct");if(_c)_c.textContent=_p+"%";'
+    'const _f=_x.querySelector(".kit-row-fill");if(_f)_f.style.width=_p+"%"}};'
     '_t();if(!window.__kitTick)window.__kitTick=setInterval(_t,1e3)},'
 )
 
 
-def kit_compact_map(m):
-    """Carry the field, drop a stale bar, fold the summary into the boundary."""
+def kit_row_map(m):
+    """Carry both fields, drop an overtaken row, fold the summary into its row."""
     out, tmap, tset, it1, lst, it, ex, mid = m.groups()
     return (
-        'const %(out)s=[],%(map)s=new Map,%(set)s=new Set;let _kitDone=-1;'
+        'const %(out)s=[],%(map)s=new Map,%(set)s=new Set;'
+        'let _kitDone=-1,_kitWait=-1;'
         'for(const %(it1)s of %(lst)s)'
         '%(it1)s.kind==="tool_use"&&%(it1)s.toolId&&%(set)s.add(%(it1)s.toolId),'
         '%(it1)s.kind==="tool_result"&&%(it1)s.toolId&&%(map)s.set(%(it1)s.toolId,%(it1)s),'
-        # The last row that reports a finished compaction. A bar before it is
-        # from a compaction already over; one after it is the live one.
+        # The last row that reports a finished compaction, and the last wait row
+        # of any kind. A bar or a countdown before either is history.
         '%(it1)s.compact&&%(it1)s.compact.phase!=="running"'
-        '&&(_kitDone=%(lst)s.indexOf(%(it1)s));'
+        '&&(_kitDone=%(lst)s.indexOf(%(it1)s)),'
+        '%(it1)s.wait&&(_kitWait=%(lst)s.indexOf(%(it1)s));'
         'for(const %(it)s of %(lst)s){const %(ex)s={displayText:%(it)s.displayText,'
-        '%(mid)sisCompactSummary:%(it)s.isCompactSummary,compact:%(it)s.compact};'
+        '%(mid)sisCompactSummary:%(it)s.isCompactSummary,'
+        'compact:%(it)s.compact,wait:%(it)s.wait};'
+        'if(%(it)s.wait){'
+        'if(%(it)s.wait.phase==="holding"&&%(lst)s.indexOf(%(it)s)<_kitWait)continue;'
+        '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
+        'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
         'if(%(it)s.compact||%(it)s.isCompactSummary){'
         'const _kitAt=%(out)s[%(out)s.length-1];'
         'if(%(it)s.isCompactSummary){'
@@ -751,47 +766,65 @@ def kit_compact_map(m):
            'it': it, 'ex': ex, 'mid': mid})
 
 
-def kit_compact_row(m):
-    """One branch ahead of the task-notification row, modelled on it."""
+def kit_row_row(m):
+    """Two branches ahead of the task-notification row, modelled on it."""
     e, x = m.group(1), m.group(2)
+    common = {'e': e, 'x': x, 'md': MD[0] if MD else '', 'tick': TICK}
     return (
-        # The ticked node is the row itself, and only while it runs: the
-        # interval looks for [data-kit-since] and stops when none is left, so a
-        # finished row must not carry it.
-        '%(e)s.compact?%(x)s.jsx("div",{className:"kit-compact",'
+        # --- a wait: the countdown is to a deadline the server chose, so the
+        # bar drains rather than fills, and only a live wait carries the ticker.
+        '%(e)s.wait?%(x)s.jsx("div",{className:"kit-row kit-wait",'
+        '...(%(e)s.wait.phase==="holding"?{%(tick)s'
+        '"data-kit-since":%(e)s.timestamp,"data-kit-until":%(e)s.wait.until}:{}),children:'
+        '%(x)s.jsxs("div",{className:"kit-row-body",children:['
+        '%(x)s.jsxs("div",{className:"kit-row-line",children:['
+        '%(x)s.jsx("span",{className:"kit-row-dot"+('
+        '%(e)s.wait.phase==="holding"?" is-running":'
+        '%(e)s.wait.phase==="expired"?" is-failed":"")}),'
+        '%(x)s.jsx("span",{children:%(e)s.content||"Waiting"}),'
+        '%(e)s.wait.phase==="holding"?%(x)s.jsx("span",'
+        '{className:"kit-row-num",children:"…"}):null]}),'
+        '%(e)s.wait.phase==="holding"?%(x)s.jsx("div",{className:"kit-row-bar",'
+        'children:%(x)s.jsx("div",{className:"kit-row-track",children:'
+        '%(x)s.jsx("div",{className:"kit-row-fill"})})}):null,'
+        '%(e)s.wait.tasks&&%(e)s.wait.tasks.length?'
+        '%(x)s.jsxs("details",{className:"kit-row-more",children:['
+        '%(x)s.jsx("summary",{children:"what it is waiting for"}),'
+        '%(x)s.jsx("ul",{className:"kit-row-fold kit-wait-tasks",'
+        'children:%(e)s.wait.tasks.map((_w,_i)=>%(x)s.jsx("li",{children:'
+        '(_w.task_type||"task")+(_w.description?" · "+_w.description:"")},_i))})]}):null]})}):'
+        # --- a compaction
+        '%(e)s.compact?%(x)s.jsx("div",{className:"kit-row kit-compact",'
         '...(%(e)s.compact.phase==="running"'
         '?{%(tick)s"data-kit-since":%(e)s.timestamp}:{}),children:'
-        '%(x)s.jsxs("div",{className:"kit-compact-body",children:['
-        '%(x)s.jsxs("div",{className:"kit-compact-line",children:['
-        '%(x)s.jsx("span",{className:"kit-compact-dot"+('
+        '%(x)s.jsxs("div",{className:"kit-row-body",children:['
+        '%(x)s.jsxs("div",{className:"kit-row-line",children:['
+        '%(x)s.jsx("span",{className:"kit-row-dot"+('
         '%(e)s.compact.phase==="running"?" is-running":'
         '%(e)s.compact.phase==="failed"?" is-failed":"")}),'
         '%(x)s.jsx("span",{children:%(e)s.content||"Compacted"}),'
         '%(e)s.compact.phase==="running"?%(x)s.jsx("span",'
-        '{className:"kit-compact-elapsed",children:"0s"}):null]}),'
-        # Bar and percentage on their own line under the sentence, as the CLI
-        # puts them under its spinner. Both start where the first tick will
-        # find them a moment later, not at a number they never showed.
+        '{className:"kit-row-num",children:"0s"}):null]}),'
         '%(e)s.compact.phase==="running"?%(x)s.jsxs("div",'
-        '{className:"kit-compact-bar",children:['
-        '%(x)s.jsx("div",{className:"kit-compact-track",children:%(x)s.jsx("div",'
-        '{className:"kit-compact-fill"})}),'
-        '%(x)s.jsx("span",{className:"kit-compact-pct",children:"0%%"})]}):null,'
-        '%(e)s.compactSummary?%(x)s.jsxs("details",{className:"kit-compact-more",'
+        '{className:"kit-row-bar",children:['
+        '%(x)s.jsx("div",{className:"kit-row-track",children:%(x)s.jsx("div",'
+        '{className:"kit-row-fill"})}),'
+        '%(x)s.jsx("span",{className:"kit-row-pct",children:"0%%"})]}):null,'
+        '%(e)s.compactSummary?%(x)s.jsxs("details",{className:"kit-row-more",'
         'children:[%(x)s.jsx("summary",{children:"full summary"}),'
-        '%(x)s.jsx("div",{className:"kit-compact-summary",children:%(x)s.jsx(%(md)s,'
+        '%(x)s.jsx("div",{className:"kit-row-fold",children:%(x)s.jsx(%(md)s,'
         '{className:"prose prose-sm max-w-none font-serif dark:prose-invert",'
         'children:%(e)s.compactSummary})})]}):null]})}):'
-        % {'e': e, 'x': x, 'md': MD[0] if MD else '', 'tick': TICK}) + m.group(0)
+        % common) + m.group(0)
 
 
 counts = (len(MAP.findall(s)), len(NOTIF.findall(s)))
-if MD and counts == (1, 1) and '_kitDone' not in s:
-    s = MAP.sub(kit_compact_map, s, count=1)
-    s = NOTIF.sub(kit_compact_row, s, count=1)
-    applied.append('compaction rows')
+if MD and counts == (1, 1) and '_kitWait' not in s:
+    s = MAP.sub(kit_row_map, s, count=1)
+    s = NOTIF.sub(kit_row_row, s, count=1)
+    applied.append('compaction and wait rows')
 else:
-    missing.append('compaction rows (%s matches%s)'
+    missing.append('compaction and wait rows (%s matches%s)'
                    % ('/'.join(str(c) for c in counts),
                       '' if MD else ', markdown unnamed'))
 
@@ -1030,6 +1063,28 @@ PRS="$PKG/dist-server/server/modules/providers/services/provider-runtime.service
 CWS="$PKG/dist-server/server/modules/websocket/services/chat-websocket.service.js"
 if [[ -f $RTP && -f $PRS && -f $CWS ]]; then
   kit_revert() { for f in "$RTP" "$PRS" "$CWS"; do mv -f "$f.prepatch" "$f"; done; }
+  # Patch the file the package shipped, not whatever a previous kit left in it.
+  # These edits are text substitutions, so a block this kit CHANGED between
+  # versions would be inserted a second time: the syntax check catches that and
+  # reverts, and the old block then stays installed forever, repeating the same
+  # failure on every start. (The frontend needs none of this -- it always rebuilds
+  # its patched copy from the bundle upstream shipped.)
+  #
+  # Self-healing across package upgrades, with no version to keep track of:
+  # upstream never says KIT, so a file that does not is the original -- cache it.
+  # One that does is ours, so put the original back before patching it again.
+  kit_fresh=0
+  for f in "$RTP" "$PRS" "$CWS"; do
+    if ! grep -q KIT "$f"; then
+      cp "$f" "$f.kitorig"
+    elif [[ -f $f.kitorig ]]; then
+      cp "$f.kitorig" "$f"
+      kit_fresh=$((kit_fresh + 1))
+    fi
+  done
+  if ((kit_fresh)); then
+    echo "  re-patching $kit_fresh file(s) from the packaged originals"
+  fi
   for f in "$RTP" "$PRS" "$CWS"; do cp "$f" "$f.prepatch"; done
   if python3 - "$RTP" "$PRS" "$CWS" "$STEER" <<'PY'
 import sys
@@ -1102,6 +1157,7 @@ STEER_BLOCK = r'''// KIT: mid-turn steering ------------------------------------
 // refuses once that run's stream has been released, so nothing is ever written
 // into a closed pipe.
 const kitPushers = new WeakMap(); // run -> push a frame onto its held stdin
+const kitResumers = new WeakMap(); // run -> take a message into its held wait
 /**
  * KIT: writes a steered line into the CLI's own transcript.
  *
@@ -1223,7 +1279,341 @@ function injectIntoClaudeSDKSession(sessionId, text) {
     });
     return true;
 }
+/**
+ * KIT: hands a message to a run whose turn is over but whose process is still
+ * held open for its background work -- see patch 10. Returns a promise that
+ * settles when the message's own turn completes, or null when no held run will
+ * take it, in which case the caller starts a run the way it always has.
+ *
+ * Preferring this over a new run is what keeps the work alive: a new run
+ * supersedes the held one, and addSession interrupts it and releases its stdin,
+ * which takes down every background shell and monitor the CLI was tracking.
+ * @param {string} sessionId - Session identifier
+ * @param {string} text - What to say to the held run
+ * @param {Object} writer - The new run's writer, which its turn reports to
+ * @returns {Promise<void>|null} Settles with that turn; null if not applicable
+ */
+function kitResumeHeldRun(sessionId, text, writer) {
+    const instance = getSession(sessionId)?.instance;
+    const resume = instance ? kitResumers.get(instance) : null;
+    return resume ? resume(text, writer) : null;
+}
 '''
+
+# --- patch 10: the wait, said out loud ---------------------------------------
+# A turn that ends with background work still running is the one case where
+# CloudCLI shows a finished turn and means "still waiting". Upstream holds the
+# CLI's stdin open for it (up to BG_WAIT_CEILING_MS) so the work can report back
+# in a follow-up turn -- but the client is told `complete` when the first
+# `result` lands, and nothing is sent when the hold starts, when it ends, or when
+# it runs out. A session waiting on a test looks exactly like a session that
+# stopped, which is how "it timed out and said nothing" happens.
+#
+# Three things, in one block because they are one story:
+#
+#   the rows      the hold, the report-back, and the expiry each become an
+#                 ordinary assistant row, so the transcript says what the
+#                 session is doing. Not gated on CLOUDCLI_STEER: it adds to a
+#                 turn's account of itself and takes nothing away.
+#   the ceiling   the wait lasts as long as the turn said it needs -- a Monitor
+#                 armed for 50 minutes cannot report inside a 30-minute hold --
+#                 bounded by KIT_WAIT_CEILING_MAX_MS, and the CLI is given that
+#                 bound so the server's per-run figure is the one that decides.
+#   the resume    a message that lands mid-wait goes INTO the held CLI instead of
+#                 starting a run that supersedes it. That is the part that keeps
+#                 the work alive: addSession interrupts a superseded run and
+#                 releases its stdin, taking every background shell and monitor
+#                 with it -- which is why prodding a waiting session was answered
+#                 by "No completion record was found for this background shell
+#                 command from the previous session". Steering already owns the
+#                 pipe this needs, so the resume half rides on patch 5 and is
+#                 gated with it.
+#
+# What the CLI does with a frame pushed into a parked stream is not inferred: a
+# probe against 2.1.235 pushed one after the first `result` and the CLI ran it as
+# an ordinary turn, wrote it into its own transcript (unlike a mid-turn steer,
+# which patch 5 has to record itself), and the background shell armed by the turn
+# before it survived and reported back afterwards.
+WAIT_BLOCK = r'''
+// KIT: the outer bound on a hold, and what the CLI itself is given. Upstream's
+// 30 minutes is a floor: the tools name their own deadlines (a Monitor's
+// timeout_ms is up to an hour), and work that cannot report before its container
+// is torn down can only ever look like work that never reported.
+const KIT_WAIT_CEILING_MAX_MS = 60 * 60 * 1000;
+/**
+ * KIT: a wait, as a row. Everything it says is in `content`, so a bundle without
+ * the kit's browser half reads it as the sentence it is; `wait` beside it is only
+ * how the patched one draws it (a countdown, a draining bar, the task list).
+ */
+function kitWaitRow(sessionId, content, wait) {
+    return createNormalizedMessage({
+        sessionId,
+        provider: 'claude',
+        kind: 'text',
+        role: 'assistant',
+        content,
+        wait,
+    });
+}
+/** KIT: a duration the way the CLI writes one. */
+function kitFor(ms) {
+    const secs = Math.max(0, Math.round(ms / 1000));
+    return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+/**
+ * KIT: how long the work a message starts says it needs, in ms. A Monitor names
+ * its own deadline; a persistent one names none, so it gets the outer bound. A
+ * background shell carries the Bash timeout, which is capped well inside the
+ * floor and so never stretches anything. Zero means "no opinion".
+ */
+function kitArmedWaitMs(sdkMessage) {
+    const content = sdkMessage?.message?.content;
+    if (!Array.isArray(content)) {
+        return 0;
+    }
+    let armed = 0;
+    for (const block of content) {
+        if (block?.type !== 'tool_use') {
+            continue;
+        }
+        if (block.name === 'Monitor') {
+            armed = Math.max(armed, block.input?.persistent === true
+                ? KIT_WAIT_CEILING_MAX_MS
+                : Number(block.input?.timeout_ms) || 0);
+        }
+        else if (block.name === 'Bash' && block.input?.run_in_background === true) {
+            armed = Math.max(armed, Number(block.input?.timeout) || 0);
+        }
+    }
+    return armed;
+}
+/** KIT: what the row says while the wait is on, and when a message ends it. */
+function kitWaitText(tasks, ms) {
+    const what = tasks.length === 0 ? 'background work'
+        : tasks.length === 1 ? '1 background task'
+            : `${tasks.length} background tasks`;
+    // A ceiling is an approximation, so say it like one: whole minutes.
+    const window = ms >= 90000 ? `${Math.round(ms / 60000)}m` : kitFor(ms);
+    return `Waiting on ${what} · up to ${window}`;
+}
+function kitKeptText(tasks) {
+    if (tasks.length === 0) {
+        return 'Continued in the same process, so the background work survives';
+    }
+    return `Continued in the same process · ${tasks.length === 1 ? '1 task' : `${tasks.length} tasks`} still running`;
+}
+'''
+
+# Per-run state. The writer is wrapped rather than captured: a message taken into
+# a held run belongs to a NEW run with its own event sequence, and the loop must
+# report there from that moment on -- while a `complete` passing through is what
+# tells that run's caller its turn is over.
+WAIT_STATE = r'''    // KIT: the CLI's own list of what is still outstanding, from its
+    // `background_tasks_changed` events. The flag above only knows about work
+    // the turn that just ended started; the list knows about all of it, which is
+    // what a run resumed mid-wait needs in order not to release it.
+    let kitTasks = [];
+    let kitArmedMs = 0;
+    let kitHoldStartedAt = 0;
+    const kitCeilingMs = () => Math.min(KIT_WAIT_CEILING_MAX_MS,
+        Math.max(BG_WAIT_CEILING_MS, kitArmedMs ? kitArmedMs + 120000 : 0));
+    // KIT: the writer this run reports to -- wrapped rather than captured. A
+    // message taken into a held run belongs to a NEW run with its own event
+    // sequence, so the target is swapped when that happens, and a `complete`
+    // passing through is what tells that run's caller its turn is over. Wrapped
+    // with a Proxy so everything else about a writer (setSessionId, userId, the
+    // reconnect path's updateWebSocket) reaches whichever one is current.
+    const kitLive = { target: ws, onComplete: null };
+    ws = new Proxy({}, {
+        get: (_unused, prop) => {
+            if (prop === 'send') {
+                return (message) => {
+                    const done = message?.kind === 'complete' ? kitLive.onComplete : null;
+                    if (done) {
+                        kitLive.onComplete = null;
+                    }
+                    try {
+                        return kitLive.target.send(message);
+                    }
+                    finally {
+                        done?.();
+                    }
+                };
+            }
+            const value = kitLive.target?.[prop];
+            return typeof value === 'function' ? value.bind(kitLive.target) : value;
+        },
+        set: (_unused, prop, value) => {
+            if (kitLive.target) {
+                kitLive.target[prop] = value;
+            }
+            return true;
+        },
+        has: (_unused, prop) => prop in (kitLive.target || {}),
+    });
+'''
+
+WAIT_TIMER = r'''        idleReleaseTimer = setTimeout(() => {
+            idleReleaseTimer = null;
+            // KIT: the wait ran out with nothing reported. Say so where the
+            // conversation is; going quiet here is the whole complaint.
+            if (kitHoldStartedAt) {
+                ws.send(kitWaitRow(capturedSessionId || sessionId || null,
+                    `Background work never reported back · waited ${kitFor(Date.now() - kitHoldStartedAt)}`,
+                    { phase: 'expired', ms: Date.now() - kitHoldStartedAt, tasks: kitTasks }));
+                kitHoldStartedAt = 0;
+            }
+            releasePromptStream();
+        }, kitCeilingMs());
+'''
+
+WAIT_TASKS = r'''            // KIT: the CLI's own accounting of outstanding tasks. A list that
+            // empties after being full is the work reporting in -- the one way a
+            // wait ends well, and worth saying so.
+            if (message?.type === 'system' && message.subtype === 'background_tasks_changed') {
+                const kitWere = kitTasks.length;
+                kitTasks = Array.isArray(message.tasks) ? message.tasks : [];
+                if (kitWere && !kitTasks.length && kitHoldStartedAt) {
+                    ws.send(kitWaitRow(sid,
+                        `Background work reported back after ${kitFor(Date.now() - kitHoldStartedAt)}`,
+                        { phase: 'reported', ms: Date.now() - kitHoldStartedAt }));
+                    kitHoldStartedAt = 0;
+                }
+            }
+            if (startsBackgroundWork(message)) {
+                backgroundWorkPending = true;
+                kitArmedMs = Math.max(kitArmedMs, kitArmedWaitMs(message));
+            }
+'''
+
+WAIT_HOLD = r'''                if (backgroundWorkPending || kitTasks.length) {
+                    // Work started during this turn is still running. Hold the process
+                    // open so it can finish and report back in a follow-up turn; the
+                    // ceiling is only a backstop for work that never reports.
+                    // KIT: `kitTasks.length` holds for anything the CLI still lists,
+                    // even when this turn did not start it -- a turn resumed mid-wait
+                    // must not release what the turn before it armed.
+                    backgroundWorkPending = false;
+                    heldForBackgroundWork = true;
+                    scheduleRelease();
+                    // KIT: and say what is happening. Until this row the UI showed a
+                    // finished turn and nothing else, which reads exactly like a
+                    // session that stopped.
+                    kitHoldStartedAt = Date.now();
+                    const kitMs = kitCeilingMs();
+                    ws.send(kitWaitRow(capturedSessionId || sessionId || null,
+                        kitWaitText(kitTasks, kitMs),
+                        {
+                            phase: 'holding',
+                            ms: kitMs,
+                            until: new Date(Date.now() + kitMs).toISOString(),
+                            tasks: kitTasks,
+                        }));
+                }
+'''
+
+# The resume closure: what a message lands in when the turn is over but the
+# process is still held. Placed beside the pusher, which is the other half of the
+# same pipe, and gated with it.
+RESUME_CLOSURE = r'''        // KIT: and how a message reaches this run once its turn is over but its
+        // process is still held for background work. Returns a promise settling
+        // when that message's own turn completes, so the caller can await it the
+        // way it awaits a run -- or null, meaning "not mine", and the caller
+        // starts a run as before.
+        kitResumers.set(queryInstance, (text, writer) => {
+            if (!heldForBackgroundWork || typeof text !== 'string' || !text.trim()) {
+                return null;
+            }
+            const push = kitPushers.get(queryInstance);
+            // A refused push means stdin is already released: the CLI is winding
+            // down and the frame would go into a closed pipe.
+            if (!push || !push({
+                type: 'user',
+                message: { role: 'user', content: text },
+                parent_tool_use_id: null,
+                timestamp: new Date().toISOString(),
+            })) {
+                return null;
+            }
+            // The turn this starts belongs to the run that brought the message:
+            // report there, and owe it a `complete`. The CLI writes the frame
+            // into its transcript itself -- it is parked between turns, not
+            // mid-turn -- so unlike a steer there is nothing to record here.
+            if (writer) {
+                kitLive.target = writer;
+            }
+            turnCompleteSent = false;
+            heldForBackgroundWork = false;
+            if (idleReleaseTimer) {
+                clearTimeout(idleReleaseTimer);
+                idleReleaseTimer = null;
+            }
+            if (kitHoldStartedAt) {
+                ws.send(kitWaitRow(capturedSessionId || sessionId || null,
+                    kitKeptText(kitTasks),
+                    { phase: 'resumed', ms: Date.now() - kitHoldStartedAt, tasks: kitTasks }));
+                kitHoldStartedAt = 0;
+            }
+            console.log(`[KIT] ${sessionKey()} took a message into its held run (${text.length} chars)`);
+            return new Promise((resolve) => {
+                let settled = false;
+                const done = () => {
+                    if (!settled) {
+                        settled = true;
+                        resolve();
+                    }
+                };
+                kitLive.onComplete = done;
+                // Backstop: an aborted or superseded run's terminal `complete`
+                // is sent on its behalf elsewhere and never passes through this
+                // writer, and a caller left awaiting would hold its run open for
+                // good -- the very wedge patch 4 exists to prevent.
+                setTimeout(done, KIT_WAIT_CEILING_MAX_MS + 60000).unref?.();
+            });
+        });
+'''
+
+WAIT = [
+    ('waiting ceiling',
+     'const BG_WAIT_CEILING_MS = 30 * 60 * 1000;\n',
+     'const BG_WAIT_CEILING_MS = 30 * 60 * 1000;\n' + WAIT_BLOCK, 1),
+    ('waiting env',
+     '    sdkOptions.env = { ...process.env, '
+     'CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_CEILING_MS) };\n',
+     '    // KIT: the CLI is given the outer bound, so the per-run figure the\n'
+     '    // server computes below is always the one that decides.\n'
+     '    sdkOptions.env = { ...process.env, '
+     'CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(KIT_WAIT_CEILING_MAX_MS) };\n', 1),
+    ('waiting state',
+     '    let heldForBackgroundWork = false;\n',
+     '    let heldForBackgroundWork = false;\n' + WAIT_STATE, 1),
+    ('waiting expiry',
+     '        idleReleaseTimer = setTimeout(() => {\n'
+     '            idleReleaseTimer = null;\n'
+     '            releasePromptStream();\n'
+     '        }, BG_WAIT_CEILING_MS);\n',
+     WAIT_TIMER, 1),
+    ('waiting tasks',
+     '            if (startsBackgroundWork(message)) {\n'
+     '                backgroundWorkPending = true;\n'
+     '            }\n',
+     WAIT_TASKS, 1),
+    ('waiting hold',
+     '                if (backgroundWorkPending) {\n'
+     '                    // Work started during this turn is still running. Hold the process\n'
+     '                    // open so it can finish and report back in a follow-up turn; the\n'
+     '                    // ceiling is only a backstop for work that never reports.\n'
+     '                    backgroundWorkPending = false;\n'
+     '                    heldForBackgroundWork = true;\n'
+     '                    scheduleRelease();\n'
+     '                }\n',
+     WAIT_HOLD, 1),
+]
+RESUME = [
+    ('waiting resume',
+     '        kitPushers.set(queryInstance, heldPrompt.push);\n',
+     '        kitPushers.set(queryInstance, heldPrompt.push);\n' + RESUME_CLOSURE, 1),
+]
 
 SESSION_MAP = '/**\n * Adds a session to the active sessions map\n'
 
@@ -1293,7 +1683,8 @@ RUNTIME = [
      'export const claudeRuntime = {\n'
      '    run: queryClaudeSDK,\n'
      '    abort: abortClaudeSDKSession,\n'
-     '    inject: injectIntoClaudeSDKSession,\n', 1),
+     '    inject: injectIntoClaudeSDKSession,\n'
+     '    resumeHeld: kitResumeHeldRun,\n', 1),
 ]
 SERVICE = [
     ('steering passthrough',
@@ -1303,6 +1694,13 @@ SERVICE = [
      '        inject(providerName, sessionId, text) {\n'
      '            const runtime = dependencies.resolveProvider(providerName).runtime;\n'
      '            return Boolean(runtime.inject?.(sessionId, text));\n'
+     '        },\n'
+     '        // KIT: hand a message to a run whose turn is over but whose\n'
+     '        // process is still held for its background work. Null means no\n'
+     '        // held run will take it, so the caller starts one as usual.\n'
+     '        resumeHeld(providerName, sessionId, text, writer) {\n'
+     '            const runtime = dependencies.resolveProvider(providerName).runtime;\n'
+     '            return runtime.resumeHeld?.(sessionId, text, writer) ?? null;\n'
      '        },\n'
      '        async abort(providerName, sessionId) {\n', 1),
 ]
@@ -1320,6 +1718,24 @@ CHAT = [
      '        if (dependencies.runtime.inject?.(provider, sessionId, typeof data.content === \'string\' ? data.content : \'\')) {\n'
      '            return;\n'
      '        }\n' + REFUSE.split('\n', 1)[1], 1),
+    ('waiting route',
+     '        await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);\n',
+     '        // KIT: a message that lands while the previous turn is still held\n'
+     '        // open for its background work goes into that same CLI. Starting a\n'
+     '        // run here would supersede the held one and kill the work it is\n'
+     '        // waiting on, which is what answered a prod with a missing\n'
+     '        // completion record. Attachments still start a fresh run: the held\n'
+     '        // stream carries text, and the model and effort a resumed turn runs\n'
+     '        // with are the ones its process was started with.\n'
+     '        const kitHeld = uniqueAttachments.length === 0\n'
+     '            ? dependencies.runtime.resumeHeld?.(provider, sessionId, command, run.writer)\n'
+     '            : null;\n'
+     '        if (kitHeld) {\n'
+     '            await kitHeld;\n'
+     '        }\n'
+     '        else {\n'
+     '            await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);\n'
+     '        }\n', 1),
 ]
 
 base = edit(open(rtp).read(), *STOP)
@@ -1327,9 +1743,28 @@ if base is None:
     sys.exit(1)                     # patch 4's own anchor moved; revert and warn
 runtime, service, chat = base, open(prs).read(), open(cws).read()
 
+# Patch 10's first half -- the rows and the ceiling -- is not gated on the
+# steering flag: it adds to a turn's own account of itself and takes nothing
+# away. Applied before the steering edits, and on its own copy, so an anchor that
+# moved here leaves patches 4 and 5 exactly as they were.
+waiting = runtime
+for label, old, new, count in WAIT:
+    waiting = edit(waiting, old, new, label, count)
+if waiting is None:
+    print('  waiting NOT applied -- anchors moved; the other chat patches stand alone',
+          file=sys.stderr)
+else:
+    runtime = waiting
+
 if steer:
     for label, old, new, count in RUNTIME:
         runtime = edit(runtime, old, new, label, count)
+    # The resume closure reads the per-run state the first half inserts, so it
+    # goes in only where that landed. Without it a message arriving mid-wait
+    # starts a run the way it always did.
+    if waiting is not None:
+        for label, old, new, count in RESUME:
+            runtime = edit(runtime, old, new, label, count)
     for label, old, new, count in SERVICE:
         service = edit(service, old, new, label, count)
     for label, old, new, count in CHAT:
@@ -1344,7 +1779,9 @@ if steer:
               file=sys.stderr)
         runtime, service, chat = base, None, None
 else:
-    for label, old, new, _ in RUNTIME:
+    # RESUME first: it was inserted INSIDE the pusher edit's text, so undoing
+    # that edit first would leave nothing for it to match.
+    for label, old, new, _ in RESUME + RUNTIME:
         runtime = unedit(runtime, old, new, label)
     for label, old, new, _ in SERVICE:
         service = unedit(service, old, new, label)
@@ -1402,6 +1839,28 @@ fi
 # patches above it lands on the next server start.
 CSP="$PKG/dist-server/server/modules/providers/list/claude/claude-sessions.provider.js"
 if [[ -f $CSP ]]; then
+  # Patch the file the package shipped, not whatever a previous kit left in it.
+  # These edits are text substitutions, so a block this kit CHANGED between
+  # versions would be inserted a second time: the syntax check catches that and
+  # reverts, and the old block then stays installed forever, repeating the same
+  # failure on every start. (The frontend needs none of this -- it always rebuilds
+  # its patched copy from the bundle upstream shipped.)
+  #
+  # Self-healing across package upgrades, with no version to keep track of:
+  # upstream never says KIT, so a file that does not is the original -- cache it.
+  # One that does is ours, so put the original back before patching it again.
+  kit_fresh=0
+  for f in "$CSP"; do
+    if ! grep -q KIT "$f"; then
+      cp "$f" "$f.kitorig"
+    elif [[ -f $f.kitorig ]]; then
+      cp "$f.kitorig" "$f"
+      kit_fresh=$((kit_fresh + 1))
+    fi
+  done
+  if ((kit_fresh)); then
+    echo "  re-patching $kit_fresh file(s) from the packaged originals"
+  fi
   cp "$CSP" "$CSP.prepatch"
   if python3 - "$CSP" <<'PY'
 import sys

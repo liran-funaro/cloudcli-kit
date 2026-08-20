@@ -173,34 +173,32 @@ code, pre, kbd, samp, .font-mono {
    1280px), wasting most of a wide display.                              */
 [class*="max-w-"] { max-width: 100% !important; }
 
-/* --- compaction rows -----------------------------------------------------
-   Patch 9 draws compaction in the transcript the way the CLI draws it: a dot,
-   a line of numbers, a bar with a percentage beside it while it runs, and the
-   summary folded behind a disclosure instead of dumped into the conversation
-   as a 24 KB bubble.
+/* --- kit rows: compaction, and waiting on background work -----------------
+   Patches 9 and 10 draw two things the transcript used to drop, in the shape
+   the CLI draws them: a dot, a sentence, a number, a bar, and a disclosure for
+   what would otherwise be a wall of text.
 
-   The bar fills on the CLI's own curve -- 1-e^(-t/90) over elapsed seconds,
-   capped at 95% -- because that is all the CLI has either: nothing in the
-   stream reports real progress. It is an estimate in both windows, easing
-   toward a ceiling it never reaches, so a compaction that runs long never
-   reads as finished. Its width is written by the same one-second interval that
-   writes the elapsed reading, which is why the transition below lasts exactly
-   as long as one tick: the bar arrives at each number just as the next is
-   computed, and never appears to stall between them.
+   A compaction's bar fills on the CLI's own curve -- 1-e^(-t/90) over elapsed
+   seconds, capped at 95% -- because that is all the CLI has either: nothing in
+   the stream reports real progress. A wait's bar is the honest opposite: it
+   drains toward a deadline the server actually chose, and the number beside it
+   counts down to it. Both are written by the same one-second interval, which is
+   why the transition below lasts exactly one tick: the bar arrives at each
+   number as the next is computed, and never appears to stall between them.
 
    The look lives here rather than in the patch, so it can be retuned without
-   re-patching, and it is built from the app's own variables, so it follows
-   the theme with no dark-mode copy.                                       */
-.kit-compact { width: 100%; }
+   re-patching, and it is built from the app's own variables, so it follows the
+   theme with no dark-mode copy.                                            */
+.kit-row { width: 100%; }
 
-.kit-compact-body {
+.kit-row-body {
   display: flex;
   flex-direction: column;
   gap: .3rem;
   padding: .15rem 0;
 }
 
-.kit-compact-line {
+.kit-row-line {
   display: flex;
   align-items: center;
   gap: .5rem;
@@ -209,34 +207,34 @@ code, pre, kbd, samp, .font-mono {
   color: hsl(var(--muted-foreground));
 }
 
-.kit-compact-dot {
+.kit-row-dot {
   flex: none;
   width: .375rem;
   height: .375rem;
   border-radius: 9999px;
   background: hsl(var(--muted-foreground) / .45);
 }
-.kit-compact-dot.is-running {
+.kit-row-dot.is-running {
   background: hsl(var(--primary));
-  animation: kit-compact-breathe 1.6s ease-in-out infinite;
+  animation: kit-row-breathe 1.6s ease-in-out infinite;
 }
-.kit-compact-dot.is-failed { background: hsl(var(--destructive)); }
+.kit-row-dot.is-failed { background: hsl(var(--destructive)); }
 
-.kit-compact-elapsed {
+.kit-row-num {
   font-variant-numeric: tabular-nums;
   opacity: .7;
 }
 
-/* Bar and percentage on a line of their own, where the CLI puts them: under
-   the sentence, the number dim and to the right of the track.             */
-.kit-compact-bar {
+/* Bar and number on a line of their own, where the CLI puts them: under the
+   sentence, the figure dim and to the right of the track.                   */
+.kit-row-bar {
   display: flex;
   align-items: center;
   gap: .5rem;
   font-size: .75rem;
   color: hsl(var(--muted-foreground));
 }
-.kit-compact-track {
+.kit-row-track {
   flex: 1 1 auto;
   max-width: 18rem;
   height: 2px;
@@ -244,7 +242,7 @@ code, pre, kbd, samp, .font-mono {
   border-radius: 9999px;
   background: hsl(var(--muted-foreground) / .2);
 }
-.kit-compact-fill {
+.kit-row-fill {
   width: 0;
   height: 100%;
   border-radius: 9999px;
@@ -252,39 +250,39 @@ code, pre, kbd, samp, .font-mono {
   transition: width 1s linear;
 }
 /* Wide enough for three digits from the start, so the track's right edge does
-   not step left when the number does.                                     */
-.kit-compact-pct {
+   not step left when the number does.                                      */
+.kit-row-pct {
   flex: none;
   min-width: 2.4em;
   font-variant-numeric: tabular-nums;
   opacity: .7;
 }
 
-@keyframes kit-compact-breathe {
+@keyframes kit-row-breathe {
   0%, 100% { opacity: 1; }
   50%      { opacity: .35; }
 }
 
 /* Asked for stillness, keep the numbers and drop the motion. */
 @media (prefers-reduced-motion: reduce) {
-  .kit-compact-dot.is-running { animation: none; }
-  .kit-compact-fill { transition: none; }
+  .kit-row-dot.is-running { animation: none; }
+  .kit-row-fill { transition: none; }
 }
 
-/* Closed, one dim word; open, what the CLI keeps behind ctrl+o. */
-.kit-compact-more > summary {
+/* Closed, a few dim words; open, what the CLI keeps behind ctrl+o or /tasks. */
+.kit-row-more > summary {
   width: fit-content;
   cursor: pointer;
   list-style: none;
   font-size: .75rem;
   color: hsl(var(--muted-foreground) / .85);
 }
-.kit-compact-more > summary::-webkit-details-marker { display: none; }
-.kit-compact-more > summary::before { content: "\25b8\a0"; }
-.kit-compact-more[open] > summary::before { content: "\25be\a0"; }
-.kit-compact-more > summary:hover { color: hsl(var(--foreground)); }
+.kit-row-more > summary::-webkit-details-marker { display: none; }
+.kit-row-more > summary::before { content: "\25b8\a0"; }
+.kit-row-more[open] > summary::before { content: "\25be\a0"; }
+.kit-row-more > summary:hover { color: hsl(var(--foreground)); }
 
-.kit-compact-summary {
+.kit-row-fold {
   margin-top: .5rem;
   max-height: 24rem;
   overflow: auto;
@@ -292,4 +290,19 @@ code, pre, kbd, samp, .font-mono {
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius, .5rem);
   background: hsl(var(--muted) / .4);
+}
+
+/* One task per line: what kind of work it is, then what it was for. */
+.kit-wait-tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: .75rem;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+.kit-wait-tasks > li { padding: .1rem 0; }
+.kit-wait-tasks > li::before {
+  content: "\2022\a0";
+  opacity: .5;
 }
