@@ -99,34 +99,29 @@ The listener should show `127.0.0.1`, not `0.0.0.0`.
 
 ## 2. Make the browser hostname resolve to loopback on the server
 
-The browser gives the SOCKS proxy the hostname rather than resolving it locally. The remote end
-of SSH therefore resolves the name before connecting. Add this on the remote server:
+Chrome hands the **hostname** to the SOCKS proxy rather than resolving it itself, so the server
+resolves the name before connecting — and DNS answers with the server's routable address, where
+a loopback-only service is not listening. Ask the server what the name means to it:
 
-```text
-# /etc/hosts
-127.0.0.1 devbox.example.com
+```bash
+ssh dev getent ahostsv4 devbox.example.com     # want 127.0.0.1
 ```
 
-For the current server:
+This step is required unless that already answers `127.0.0.1` — a few images map their own
+FQDN to loopback, and most answer with the routable address. Add the mapping once, on the
+server:
 
 ```bash
 ssh dev
-printf '%s\n' '127.0.0.1 devbox.example.com' \
-  | sudo tee -a /etc/hosts >/dev/null
+printf '%s\n' '127.0.0.1 devbox.example.com' | sudo tee -a /etc/hosts >/dev/null
 ```
 
-Add it only once. Verify:
+That changes name resolution for processes running on the server, and nothing else: no listener,
+no port exposed to the network. With CloudCLI running, the round trip should now answer:
 
 ```bash
-getent ahostsv4 devbox.example.com
-curl -sS -o /dev/null -w '%{http_code}\n' \
-  http://devbox.example.com:3001/
+curl -sS -o /dev/null -w '%{http_code}\n' http://devbox.example.com:3001/     # 200
 ```
-
-Both should use `127.0.0.1`; the HTTP request should return `200` when CloudCLI is running.
-
-This entry affects name resolution only for processes running on the server. It does not add a
-listener or expose a port to the network.
 
 ---
 
