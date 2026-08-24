@@ -209,6 +209,7 @@ Every layer is reversible without reinstalling anything:
 ```bash
 CLOUDCLI_FRONTEND=0 ~/bin/cloudcli-start    # upstream's bundle, untouched
 CLOUDCLI_STEER=0 ~/bin/cloudcli-start       # drop the steering and held-run edits
+CLOUDCLI_LINKS=0 ~/bin/cloudcli-start       # drop the clickable paths and the reads for them
 rm ~/.config/cloudcli/ide-theme.css         # un-link the stylesheet on the next start
 ```
 
@@ -363,13 +364,15 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 9/9 applied -- sidebar default, model description, ctrl+enter to send,
+frontend: 10/10 applied -- sidebar default, model description, ctrl+enter to send,
 send while running, conversation row, conversation refresh, cli commands, cost chip,
-compaction and wait rows
+compaction and wait rows, clickable paths
 ```
 
-Nine because one of them, *send while running*, belongs to steering — described with it
-below. `CLOUDCLI_STEER=0` leaves it out and the run prints `8/8`.
+Ten because two of them belong to patches described below rather than here: *send while
+running* to steering, *clickable paths* to the paths patch and its server half.
+`CLOUDCLI_STEER=0` leaves the first out, `CLOUDCLI_LINKS=0` the second, and the count comes
+down with them.
 
 Several are read from more than one anchor: the conversation row alone borrows twelve names
 the minifier chose — the classname helper and button variants that give a session row its
@@ -640,6 +643,81 @@ starts a fresh run, because the parked stream takes frames rather than uploads �
 the model and effort its process was started with, so a model changed in the composer applies to
 the next *new* run, exactly as with a mid-turn steer.
 
+## A path in the chat, clickable
+
+```bash
+CLOUDCLI_LINKS=0 cloudcli-start     # to turn it off, both halves
+```
+
+An agent hands you paths constantly: the file it changed, the line it means, the report it
+wrote for you to read. Claude Code is asked to write them as `file:line` precisely because a
+terminal and an IDE both make that a link you can follow. In CloudCLI it was text — select it,
+copy it, go find it yourself.
+
+The renderer was most of the way there. A markdown **link** whose target looks like a file
+already opens that file in the editor panel: it checks the href, then the link text, and hands
+either to the app's own `openFileInEditor`, which resolves it against the project's own file
+list before opening. What it never sees is a path that was not written as a link — which is
+every path an agent actually writes.
+
+So the browser half adds no handler, no route and no component. One rehype plugin, running
+after the markdown tree is built, hands upstream's own `<a>` handler the shape it already
+knows:
+
+- path-looking **text** becomes an anchor;
+- an inline **`code`** span whose whole content is a path is wrapped in one, keeping the code
+  element as the anchor's child — so it still renders as the chip it was, with one class added
+  for the stylesheet to find.
+
+The click, the project-relative resolution and the editor panel are all upstream's.
+
+What counts as a path is deliberately asymmetric, because the two forms carry different intent.
+In prose: an absolute path, a `~/` or `./` one, a relative one with a file extension, or
+anything with a `:line` suffix — so *and/or*, *24/7* and *TCP/IP* stay words. In backticks,
+which is someone naming a file on purpose: any path with a slash, plus a bare filename whose
+extension is one of a listed set — which is what keeps `Array.isArray` and `2.1.235` from
+becoming links, and mime types are excluded by name. Fenced blocks, existing links and KaTeX
+are left alone entirely.
+
+It still guesses, and a guess is cheap in one direction only: `/api/file-tree/projects` in a
+sentence about routes becomes a link that opens a pane saying the file is not there. That is
+the whole cost, and it is why a chip stays a chip — the stylesheet gives a path in backticks
+the cursor and an underline on hover rather than a second colour, so a sentence full of file
+names does not turn blue.
+
+### The read behind it
+
+A link is worth nothing if the read behind it is refused, and one of them was. The file-tree
+API confines every path to the project root, so the report an agent wrote into `/tmp` came back
+`403 Path must be under project root` — the reported case, and the reason this patch has a
+server half at all.
+
+One function gets a fallback, and only for reads: an **absolute** path that resolves outside
+the project root is read anyway. A relative path stays relative to the project, and every
+write, rename, delete and upload goes through upstream's check untouched — so the project root
+remains the only place this server will *change* anything. What it refuses are the two ways a
+read can hurt the server itself: `/proc`, `/sys` and `/dev`, where a file reports a size it
+does not have and a read can never end, and anything over 16 MB, which is not a thing to hand
+a browser as text. The blob route that previews an image or a PDF gets the same fallback and no
+size cap, because it streams.
+
+The bound that matters here is the one on the process, not the one on the person: the same
+logged-in session can already run `cat` in the Shell tab, so this hands the UI no reach it did
+not have — which is also why it is worth being deliberate about, and why it is one flag. On a
+deployment where that reasoning does not hold, `CLOUDCLI_LINKS=0` puts the file back
+byte-identical with what upstream shipped and leaves the links unmade.
+
+One consequence worth knowing: a file outside the project opens, but does not save. The editor
+still offers its Save button and the server still refuses it, with the message above.
+
+```
+frontend: 10/10 applied -- ..., clickable paths
+file reads: applied
+```
+
+Like every server-side patch, this one lands on the next server start; the browser half is live
+on the next reload.
+
 ## The Cost tab
 
 A LiteLLM proxy bills per token, and nothing in CloudCLI knows that. So the kit
@@ -864,7 +942,8 @@ never edits.
   half needs a restart.
 - Everything is an environment knob, read on every start: `CLOUDCLI_PATCH_ONLY=1` (apply and
   exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_STEER=0`
-  (steering off, see above), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
+  (steering off, see above), `CLOUDCLI_LINKS=0` (clickable paths off, and the read they need
+  with them), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
   somewhere other than `~/.config/cloudcli`).
   `CLOUDCLI_PREFIX` and `CLOUDCLI_CONF` move the paths themselves, for an install that is not
   where the launcher looks.

@@ -161,11 +161,27 @@ code, pre, kbd, samp, .font-mono {
   background: #00000040;
 }
 /* Headings, links, quotes and table headers inherit their colour upstream,
-   deliberately -- a chip inside them would fight the surrounding text. */
-.dark .prose :is(h1, h2, h3, h4, a, blockquote, thead th) code {
+   deliberately -- a chip inside them would fight the surrounding text. The one
+   exception is a path (patch 11), which is a chip that upstream's own renderer
+   never wrapped in a link and the launcher now does: dropping it would recolour
+   every file reference in every message. */
+.dark .prose :is(h1, h2, h3, h4, a, blockquote, thead th) code:not(.kit-path) {
   color: inherit;
   background: none;
   padding: 0;
+}
+
+/* So the chip stays a chip, and says it is clickable the quiet way -- the
+   cursor, and the underline the link above it already draws on hover -- rather
+   than with a second colour in the middle of a sentence. A path written WITHOUT
+   backticks has no chip to keep and gets upstream's link colour, which is the
+   right way round: that one is rarer, and worth noticing. */
+.kit-path {
+  cursor: pointer;
+}
+a:hover > .kit-path {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* --- layout --------------------------------------------------------------

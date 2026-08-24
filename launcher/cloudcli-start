@@ -16,6 +16,14 @@
 #       In a tab that is already open, `__cloudcliSteer = false` in the console
 #       restores upstream's hold-it-back composer without a restart.
 #
+#   CLOUDCLI_LINKS=0 cloudcli-start
+#       Turn off clickable file paths (patch 11), which are otherwise ON: a path
+#       written in a message -- bare or in backticks -- becomes a link that opens
+#       that file in the editor panel, and a read of an ABSOLUTE path outside the
+#       project root is allowed so that a report an agent wrote into /tmp opens
+#       too. Reads only; every write stays confined to the project. Off reverses
+#       both halves, back to byte-identical with what upstream shipped.
+#
 # The appearance this applies is not carried here. It lives in
 # ~/.config/cloudcli/ide-theme.css, seeded by install.sh from the cloudcli-kit
 # repo and never overwritten here -- so it survives package upgrades AND kit
@@ -33,6 +41,7 @@ SRC="${CLOUDCLI_THEME:-$CONF/ide-theme.css}"
 DROP_MODELS="${CLOUDCLI_DROP_MODELS:-fable best}"
 FRONTEND="${CLOUDCLI_FRONTEND:-1}"
 STEER="${CLOUDCLI_STEER:-1}"
+LINKS="${CLOUDCLI_LINKS:-1}"
 
 if [[ ! -d $PKG ]]; then
   echo "installing @cloudcli-ai/cloudcli into $PREFIX ..."
@@ -199,10 +208,11 @@ BJS=""
 if [[ -n ${ENTRY:-} && $FRONTEND == 1 ]]; then
   TD="$(mktemp -d)"
   # .mjs so `node --check` parses it as a module regardless of where it sits.
-  if python3 - "$ENTRY" "$TD/entry.mjs" "$STEER" <<'PY'
+  if python3 - "$ENTRY" "$TD/entry.mjs" "$STEER" "$LINKS" <<'PY'
 import re, sys
 
-src, out, steer = sys.argv[1], sys.argv[2], sys.argv[3] == '1'
+src, out = sys.argv[1], sys.argv[2]
+steer, links = sys.argv[3] == '1', sys.argv[4] == '1'
 s = open(src).read()
 applied, missing = [], []
 
@@ -827,6 +837,86 @@ else:
     missing.append('compaction and wait rows (%s matches%s)'
                    % ('/'.join(str(c) for c in counts),
                       '' if MD else ', markdown unnamed'))
+
+# (11) A path in the chat, clickable. The markdown renderer already turns a
+# markdown LINK whose target looks like a file into one that opens that file in
+# the editor -- it checks the href, then the link text, and hands either to the
+# app's own openFileInEditor. What it never sees is a path that was not written
+# as a link, which is every path an agent actually writes: bare in a sentence,
+# or in backticks the way CLAUDE.md asks for it. Both stayed dead text.
+#
+# So this adds no handler and no route. One rehype plugin, running after the
+# tree is built, gives upstream's own <a> handler the shape it already knows:
+# path-looking text becomes an anchor, and an inline <code> whose whole content
+# is a path gets wrapped in one -- the code element is kept as the anchor's
+# child, so it still renders as the chip it was, with one class added for the
+# stylesheet. The click, the project-relative resolution and the editor panel
+# are all upstream's.
+#
+# What counts as a path is deliberately asymmetric, because the two forms carry
+# different intent. In prose, only an absolute or ~/ or ./ path, or a relative
+# one with a file extension, or anything with a :line suffix -- so "and/or",
+# "24/7" and "TCP/IP" stay words. In backticks, which is someone naming a file
+# on purpose, any path with a slash counts, plus a bare filename whose extension
+# is one of the ones below; that keeps `Array.isArray` and `2.1.235` from
+# becoming links, and mime types are excluded by name.
+KIT_PATHS = r'''const kitPathSkip=new Set(["a","pre","script","style","textarea","kbd","samp","math","semantics","annotation","svg"]),
+kitPathExt=/\.(?:md|markdown|txt|rst|adoc|json|jsonl|ya?ml|toml|ini|cfg|conf|env|lock|log|csv|tsv|sh|bash|fish|zsh|ps1|bat|py|ipynb|js|mjs|cjs|jsx|ts|tsx|go|rs|java|kt|kts|c|h|cc|cpp|hpp|cs|rb|php|pl|lua|swift|scala|sql|html?|css|sass|scss|less|xml|svg|png|jpe?g|gif|webp|avif|pdf|patch|diff|proto|tf|gradle|service|socket|timer|mk)$/i,
+kitAnyExt=/\.[A-Za-z][A-Za-z0-9]{0,9}$/,
+kitMime=/^(?:application|text|image|audio|video|multipart|font|model)\/[\w.+-]+$/i,
+kitPathRe=/(^|[\s(\[{<"'|>])((?:~\/|\.{1,2}\/|\/)[\w.@~+-]+(?:\/[\w.@~+-]+)*|[\w.@+-]+(?:\/[\w.@~+-]+)+)(:\d+(?::\d+)?)?/g,
+kitIsPath=(v,loose)=>{const s=String(v==null?"":v).trim();
+if(!s||s.length>512||/[\s"'`*?$|<>()\[\]{},;=]/.test(s)||s.includes("://"))return!1;
+const p=s.replace(/:\d+(?::\d+)?$/,"");
+if(!p||p.length<2||/^[.~/]+$/.test(p)||kitMime.test(p))return!1;
+if(/^(?:\/|~\/|\.{1,2}\/)/.test(p))return /[^.~/]/.test(p);
+if(p.includes("/"))return!!loose||kitAnyExt.test(p)||p!==s;
+return kitPathExt.test(p)},
+kitPathHref=v=>String(v).trim().replace(/:\d+(?::\d+)?$/,""),
+kitTextOf=n=>n.type==="text"?n.value:Array.isArray(n.children)?n.children.map(kitTextOf).join(""):"",
+kitFenced=n=>{const c=n.properties&&n.properties.className;
+return Array.isArray(c)&&c.some(x=>String(x).indexOf("language-")===0)},
+kitSplitText=v=>{const out=[];let at=0,m;kitPathRe.lastIndex=0;
+while(m=kitPathRe.exec(v)){const start=m.index+m[1].length,
+cand=(m[2]+(m[3]||"")).replace(/[.,;:!?)\]}'"]+$/,"");
+if(!cand||!kitIsPath(cand)){kitPathRe.lastIndex=start+1;continue}
+start>at&&out.push({type:"text",value:v.slice(at,start)});
+out.push({type:"element",tagName:"a",properties:{href:kitPathHref(cand)},
+children:[{type:"text",value:cand}]});
+at=start+cand.length;kitPathRe.lastIndex=at}
+return out.length?(at<v.length&&out.push({type:"text",value:v.slice(at)}),out):null},
+kitPathLinks=()=>tree=>{const walk=node=>{
+if(!Array.isArray(node.children)||!node.children.length)return;
+if(node.type==="element"){const c=node.properties&&node.properties.className;
+if(kitPathSkip.has(node.tagName)||Array.isArray(c)&&c.some(x=>String(x).indexOf("katex")===0||String(x).indexOf("math")===0))return}
+const kids=[];let hit=!1;
+for(const child of node.children){
+if(child.type==="text"){const split=kitSplitText(child.value);
+if(split){kids.push(...split),hit=!0;continue}kids.push(child);continue}
+if(child.type==="element"&&child.tagName==="code"&&!kitFenced(child)){
+const text=kitTextOf(child).trim();
+if(kitIsPath(text,!0)){child.properties=child.properties||{};
+child.properties.className=[...Array.isArray(child.properties.className)?child.properties.className:[],"kit-path"];
+kids.push({type:"element",tagName:"a",properties:{href:kitPathHref(text)},children:[child]}),hit=!0;continue}}
+walk(child),kids.push(child)}
+hit&&(node.children=kids)};walk(tree)};
+'''
+
+# Both edits or neither: the array naming a plugin that was never defined is a
+# ReferenceError on first render, i.e. a blank page -- and `node --check` cannot
+# see it. So the anchors are counted before either substitution is made.
+if links:
+    PLUG = re.compile(r'function (\w+)\(\{children:(\w+),className:(\w+),breaks:(\w+)=!1\}\)\{')
+    ARR = re.compile(r'h\.useMemo\(\(\)=>\[(\w+)\],\[\]\),\{openFileInEditor:')
+    counts = (len(PLUG.findall(s)), len(ARR.findall(s)))
+    if counts == (1, 1):
+        s = PLUG.sub(lambda m: KIT_PATHS + m.group(0), s, count=1)
+        s = ARR.sub(lambda m: 'h.useMemo(()=>[%s,kitPathLinks],[]),{openFileInEditor:'
+                    % m.group(1), s, count=1)
+        applied.append('clickable paths')
+    else:
+        missing.append('clickable paths (%s matches)'
+                       % '/'.join(str(c) for c in counts))
 
 open(out, 'w').write(s)
 for m in missing:
@@ -1942,6 +2032,144 @@ PY
     fi
   else
     mv "$CSP.prepatch" "$CSP"
+  fi
+fi
+
+# --- patch 11: a path in the chat, clickable (the server half) ----------------
+# The browser half above makes a path in a message a link. This is what happens
+# when one is clicked: the app asks the file-tree API to read the file, and that
+# read is confined to the project root -- so a review an agent wrote for you
+# into /tmp came back 403, and the link, now clickable, was still dead.
+#
+# One function gets a fallback, and only for reads: an ABSOLUTE path that
+# resolves outside the project root is read anyway. Every write, rename, delete
+# and upload still goes through upstream's check untouched, so the project root
+# remains the only place this server will CHANGE anything.
+#
+# The bound this keeps is the one that matters for a process rather than for a
+# user: the same logged-in session can already run `cat` in the Shell tab, so
+# this grants the UI no reach it did not have. What it does refuse is the two
+# ways a read can hurt the server itself -- the virtual filesystems, where a
+# file reports a size it does not have and a read can never end, and a file too
+# large to hand to a browser.
+#
+# CLOUDCLI_LINKS=0 turns the whole patch off, both halves, and puts this file
+# back byte-identical with what upstream shipped.
+FTS="$PKG/dist-server/server/modules/file-tree/file-tree.service.js"
+if [[ -f $FTS ]]; then
+  # Same self-healing as the sections above: upstream never says KIT, so a file
+  # that does not is the original -- cache it. One that does is ours, so the
+  # original goes back before it is patched again. With the flag off that
+  # restore is the whole patch, in reverse.
+  if ! grep -q KIT "$FTS"; then
+    cp "$FTS" "$FTS.kitorig"
+  elif [[ -f $FTS.kitorig ]]; then
+    cp "$FTS.kitorig" "$FTS"
+    [[ $LINKS == 1 ]] && echo "  re-patching the file reader from the packaged original"
+  fi
+fi
+if [[ $LINKS == 1 && -f $FTS ]]; then
+  cp "$FTS" "$FTS.prepatch"
+  if python3 - "$FTS" <<'PY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+
+CONFINE = """function resolvePathInsideProject(projectRoot, targetPath) {
+    const resolvedPath = path.isAbsolute(targetPath)
+        ? path.resolve(targetPath)
+        : path.resolve(projectRoot, targetPath);
+    const normalizedProjectRoot = path.resolve(projectRoot) + path.sep;
+    if (!resolvedPath.startsWith(normalizedProjectRoot)) {
+        throw createFileTreeError('Path must be under project root', 403, 'PATH_OUTSIDE_PROJECT');
+    }
+    return resolvedPath;
+}
+"""
+HELPER = CONFINE + """// KIT: reading a path that came from the chat ---------------------------------
+// A path an agent hands you is not always inside the project -- the report it
+// wrote for you lives in /tmp -- and a link to one is worth nothing if the read
+// behind it is refused. So an absolute path that resolves outside the project
+// root is read anyway. READS ONLY, and only from the two callers below: the
+// check above still guards every write, rename, delete and upload, so the
+// project root stays the only place this server will change anything.
+const KIT_VIRTUAL_ROOTS = ['/proc', '/sys', '/dev'];
+const KIT_MAX_TEXT_BYTES = 16 * 1024 * 1024;
+async function kitResolveReadable(projectRoot, targetPath, fileSystem, maximumBytes) {
+    try {
+        return resolvePathInsideProject(projectRoot, targetPath);
+    }
+    catch (error) {
+        if (!path.isAbsolute(targetPath)) {
+            throw error;              // a relative path is relative to the project
+        }
+        const resolvedPath = path.resolve(targetPath);
+        const normalizedPath = normalizeProjectPath(resolvedPath);
+        // A virtual file reports a size it does not have, and a read of one can
+        // never end. Nothing worth opening in a browser lives under these.
+        if (KIT_VIRTUAL_ROOTS.some((root) => normalizedPath === root
+            || normalizedPath.startsWith(`${root}/`))) {
+            throw createFileTreeError('Path is not a readable file', 403, 'PATH_NOT_READABLE');
+        }
+        let stats;
+        try {
+            stats = await fileSystem.stat(resolvedPath);
+        }
+        catch {
+            throw createFileTreeError('File not found', 404, 'FILE_NOT_FOUND');
+        }
+        if (!stats.isFile()) {
+            throw createFileTreeError('Path is not a readable file', 403, 'PATH_NOT_READABLE');
+        }
+        if (maximumBytes && stats.size > maximumBytes) {
+            throw createFileTreeError('File is too large to open', 413, 'FILE_TOO_LARGE');
+        }
+        return resolvedPath;
+    }
+}
+"""
+
+TEXT = """        async readTextFile(projectId, filePath) {
+            const projectRoot = await resolveProjectRoot(projectId);
+            const resolvedPath = resolvePathInsideProject(projectRoot, filePath);
+"""
+TEXT_NEW = """        async readTextFile(projectId, filePath) {
+            const projectRoot = await resolveProjectRoot(projectId);
+            const resolvedPath = await kitResolveReadable(projectRoot, filePath, fileSystem, KIT_MAX_TEXT_BYTES);
+"""
+# The blob route too, so a screenshot named in a message previews the way a text
+# file reads. Streamed, so its size is the browser's problem rather than ours.
+BLOB = """        async openFile(projectId, filePath) {
+            const projectRoot = await resolveProjectRoot(projectId);
+            const resolvedPath = resolvePathInsideProject(projectRoot, filePath);
+"""
+BLOB_NEW = """        async openFile(projectId, filePath) {
+            const projectRoot = await resolveProjectRoot(projectId);
+            const resolvedPath = await kitResolveReadable(projectRoot, filePath, fileSystem, 0);
+"""
+
+if 'KIT: reading a path' in s:
+    print('file reads: already in place')
+    sys.exit(0)
+for label, old in (('helper', CONFINE), ('text read', TEXT), ('blob read', BLOB)):
+    if s.count(old) != 1:
+        print('  MISSING: file reads / %s (%d anchors) -- upstream moved it'
+              % (label, s.count(old)), file=sys.stderr)
+        sys.exit(1)
+s = s.replace(CONFINE, HELPER, 1).replace(TEXT, TEXT_NEW, 1).replace(BLOB, BLOB_NEW, 1)
+open(path, 'w').write(s)
+print('file reads: applied')
+PY
+  then
+    if node --check "$FTS" >/dev/null 2>&1; then
+      rm -f "$FTS.prepatch"
+    else
+      mv "$FTS.prepatch" "$FTS"
+      echo "WARNING: the file-read patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$FTS.prepatch" "$FTS"
   fi
 fi
 
