@@ -672,12 +672,22 @@ knows:
 The click, the project-relative resolution and the editor panel are all upstream's.
 
 What counts as a path is deliberately asymmetric, because the two forms carry different intent.
-In prose: an absolute path, a `~/` or `./` one, a relative one with a file extension, or
-anything with a `:line` suffix — so *and/or*, *24/7* and *TCP/IP* stay words. In backticks,
-which is someone naming a file on purpose: any path with a slash, plus a bare filename whose
-extension is one of a listed set — which is what keeps `Array.isArray` and `2.1.235` from
-becoming links, and mime types are excluded by name. Fenced blocks, existing links and KaTeX
-are left alone entirely.
+In prose: an absolute path, a `~/` or `./` one, a relative one with a file extension, a bare
+filename whose extension is one of a listed set, or anything with a `:line` suffix. In
+backticks, which is someone naming a file on purpose: any path with a slash, plus that same set
+of bare filenames. So `and/or`, `24/7` and `TCP/IP` stay words, `Math.min` and `Service.Run`
+stay identifiers, `2.1.235` stays a version, `api.anthropic` stays a hostname, `Node.js` stays
+a runtime, and mime types are excluded by name. Existing links and KaTeX are left alone, and so
+are fenced code blocks — not out of caution but because that component joins its children into
+one string for the copy button and the highlighter, so an element inserted among them would
+break both. A fenced block is something you copy, not something you click.
+
+Measured against 400 assistant messages from real transcripts on this machine: 62% of every
+path-shaped string outside a code block becomes a link, and what is left is almost entirely
+not paths — `0/0` and `271/487/283/425` from a test summary, `12/29` from a checklist,
+`-c/--commit` from a usage line, `Math.min` and `chat.send` from prose about code. Which is the
+trade being made on purpose: a missed path costs a copy-paste, an over-eager one costs a pane
+that says the file is not there.
 
 It still guesses, and a guess is cheap in one direction only: `/api/file-tree/projects` in a
 sentence about routes becomes a link that opens a pane saying the file is not there. That is

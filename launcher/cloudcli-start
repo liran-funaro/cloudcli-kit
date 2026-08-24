@@ -861,17 +861,18 @@ else:
 # is one of the ones below; that keeps `Array.isArray` and `2.1.235` from
 # becoming links, and mime types are excluded by name.
 KIT_PATHS = r'''const kitPathSkip=new Set(["a","pre","script","style","textarea","kbd","samp","math","semantics","annotation","svg"]),
-kitPathExt=/\.(?:md|markdown|txt|rst|adoc|json|jsonl|ya?ml|toml|ini|cfg|conf|env|lock|log|csv|tsv|sh|bash|fish|zsh|ps1|bat|py|ipynb|js|mjs|cjs|jsx|ts|tsx|go|rs|java|kt|kts|c|h|cc|cpp|hpp|cs|rb|php|pl|lua|swift|scala|sql|html?|css|sass|scss|less|xml|svg|png|jpe?g|gif|webp|avif|pdf|patch|diff|proto|tf|gradle|service|socket|timer|mk)$/i,
+kitPathExt=/\.(?:md|markdown|txt|rst|adoc|json|jsonl|ya?ml|toml|ini|cfg|conf|env|lock|log|csv|tsv|sh|bash|fish|zsh|ps1|bat|py|ipynb|js|mjs|cjs|jsx|ts|tsx|go|rs|java|kt|kts|c|h|cc|cpp|hpp|cs|rb|php|pl|lua|swift|scala|sql|html?|css|sass|scss|less|xml|svg|png|jpe?g|gif|webp|avif|pdf|patch|diff|proto|tf|gradle|service|socket|timer|mk|mod|sum|crt|pem|key|pub)$/i,
+kitProseStop=/^(?:node|next|nuxt|vue|react|three|d3|ember|express|nest|backbone|jquery)\.[jt]sx?$/i,
 kitAnyExt=/\.[A-Za-z][A-Za-z0-9]{0,9}$/,
 kitMime=/^(?:application|text|image|audio|video|multipart|font|model)\/[\w.+-]+$/i,
-kitPathRe=/(^|[\s(\[{<"'|>])((?:~\/|\.{1,2}\/|\/)[\w.@~+-]+(?:\/[\w.@~+-]+)*|[\w.@+-]+(?:\/[\w.@~+-]+)+)(:\d+(?::\d+)?)?/g,
+kitPathRe=/(^|[\s(\[{<"'|>])((?:~\/|\.{1,2}\/|\/)[\w.@~+-]+(?:\/[\w.@~+-]+)*|[\w.@+-]+(?:\/[\w.@~+-]+)+|[\w@+-]+\.[A-Za-z][A-Za-z0-9]{0,9})(:\d+(?::\d+)?)?/g,
 kitIsPath=(v,loose)=>{const s=String(v==null?"":v).trim();
 if(!s||s.length>512||/[\s"'`*?$|<>()\[\]{},;=]/.test(s)||s.includes("://"))return!1;
 const p=s.replace(/:\d+(?::\d+)?$/,"");
 if(!p||p.length<2||/^[.~/]+$/.test(p)||kitMime.test(p))return!1;
 if(/^(?:\/|~\/|\.{1,2}\/)/.test(p))return /[^.~/]/.test(p);
 if(p.includes("/"))return!!loose||kitAnyExt.test(p)||p!==s;
-return kitPathExt.test(p)},
+return kitPathExt.test(p)&&!kitProseStop.test(p)},
 kitPathHref=v=>String(v).trim().replace(/:\d+(?::\d+)?$/,""),
 kitTextOf=n=>n.type==="text"?n.value:Array.isArray(n.children)?n.children.map(kitTextOf).join(""):"",
 kitFenced=n=>{const c=n.properties&&n.properties.className;
