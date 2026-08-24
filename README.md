@@ -12,7 +12,8 @@ composer's command menu. Enter for a newline, ⌘/Ctrl+Enter to send. A Stop tha
 and a message typed mid-turn steering the turn it lands in. Compaction drawn where it happens —
 a bar and a percentage while it runs, then what it cost, with the summary folded behind a disclosure instead of
 dropped into the conversation. A turn that ends waiting on background work says so, counts down,
-and takes your next message into the same process instead of killing what it was waiting for. A Cost tab showing what the proxy has billed. One command:
+and takes your next message into the same process instead of killing what it was waiting for. A Cost tab showing what the proxy has billed. A command that reports
+a finished run to Slack, and a skill that teaches every Claude Code session to reach for it. One command:
 `./install.sh`.
 
 ## Why a launcher and not a plugin
@@ -63,7 +64,7 @@ merge *plus* a vite + tsc build with two native modules.)
 | **Node.js 20+ and npm** | CloudCLI is an npm package; the launcher installs it for you if it is missing |
 | **A logged-in `claude` CLI on `PATH`** | CloudCLI spawns it per turn and resolves it from `PATH` (`CLAUDE_CLI_PATH` overrides). Install it from [claude.com/claude-code](https://claude.com/claude-code) and run `claude` once to log in |
 | **bash and python3** | the launcher is bash; its patches are python |
-| **curl and jq** | the Cost tab's report script only — `./install.sh --no-cost` skips it |
+| **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
 Written against **CloudCLI 1.37.2** and **Claude Code 2.1.235**. The bundle and server patches
@@ -173,6 +174,21 @@ systemctl --user enable --now cloudcli-cost.timer
 No proxy, no token, or a proxy that refuses those endpoints: the page says so and the rest of
 the kit is unaffected. `LITELLM_TOKEN_FILE` reads the key from a file instead, and
 `LITELLM_TEAM_ID` picks the team when the key belongs to more than one.
+
+### 6. Slack reporting, if you want a run to reach your phone
+
+One variable, and a dry run that proves the payload without posting:
+
+```bash
+export SLACK_REPORT_URL=https://hooks.slack.com/triggers/...   # Workflow Builder trigger
+cloudcli-slack-report -n -t "hello" -m ":wave: checking"       # prints the payload, sends nothing
+cloudcli-slack-report -t "hello" -m ":wave: checking"          # actually posts
+```
+
+The trigger has to declare the variables the command sends, and the buttons have to be bound to
+them — see [Reporting to Slack](#reporting-to-slack) for the variable list and the two traps
+worth knowing before you wire it. `./install.sh --no-slack` skips the command and its skill; no
+variable set means `--dry-run` still works and a real send exits 3 rather than failing quietly.
 
 ### Updating
 
@@ -726,6 +742,65 @@ The plugin is **copied** into `~/.claude-code-ui/plugins/cost/`, not cloned: it
 lives in a subdirectory here and the registry wants a manifest at the plugin root,
 so the UI's **Update** button has nothing to pull and re-running `install.sh` is
 how a change arrives. Enable it once in Settings → Plugins.
+
+## Reporting to Slack
+
+A long run finishes after you have left the desk, and the terminal it finished in is not
+where you are. So the kit carries [`notify/cloudcli-slack-report`](notify/cloudcli-slack-report),
+installed as `~/bin/cloudcli-slack-report`: a headline, a status line, a detail block, and up to
+five buttons, posted to a **Workflow Builder webhook trigger**.
+
+A command rather than a tab, for the same reason the stylesheet is not a plugin — the recipient
+is a phone, and the sender is usually something running unattended, so neither end is the
+browser the plugin API can reach.
+
+    cloudcli-slack-report -t "Tests failed" -m ":x: 2 of 47 failing" -s "$(tail -40 test.log)"
+    npm test 2>&1 | cloudcli-slack-report -t "Test run" -m ":test_tube: see detail"
+    cloudcli-slack-report -n ...        # print the payload, send nothing
+
+`-t` and `-m` are required, everything else has a default; `--help` lists the rest. Repo, branch
+and the button URLs come from the git checkout, and the host comes from its remote — an
+Enterprise remote yields Enterprise links, so the buttons point at the server the code is
+actually on. **Outside a repository, pass `-C DIR`**: a systemd unit's working directory is not
+the repository being reported on, and without it the repo-relative buttons have nothing to
+resolve against and fall back. `SLACK_REPORT_URL` holds the trigger URL and is read from the
+environment, so a unit wants `/bin/bash -lc` for the same reason the two existing units do — the
+credential stays in one file rather than being copied into a unit.
+
+### What the Slack side has to look like
+
+The trigger declares the variables; this command sends them. Declare `title`, `message`,
+`summary`, `repo`, `branch`, and whichever of `link_pr`, `link_checks`, `link_commit`,
+`link_detail`, `link_directive` you give buttons to. Undeclared keys are ignored, so declaring a
+subset is fine — but **every declared variable must arrive non-empty**, which is why each URL
+this command computes always resolves to a live page rather than an invented path.
+
+Two things measured rather than assumed. **Styling belongs in the workflow editor**: text passed
+through a variable keeps newlines, indentation and `:emoji:`, and loses `*bold*` — it arrives
+literal. And a button's **label is fixed in the editor** while only its URL can be a variable, so
+more buttons means more variables, not a parameterised one.
+
+### `{"ok":true}` is not delivery
+
+The trigger answers `200` with `{"ok":true}` once it has accepted the payload and started the
+workflow. A step can still fail afterwards and nothing reaches Slack. The command reports `sent`
+on that basis, and `sent` is all it means. When a report never arrives, the workflow's **run
+history** is the place that says why — a step reporting *"received invalid or missing data"* is
+almost always a declared variable that arrived empty, or one the payload never sent at all.
+
+Delivery is one-way. Slack carries the notification out; nothing comes back into the session
+through it.
+
+### The skill
+
+[`skills/reporting-to-slack/SKILL.md`](skills/reporting-to-slack/SKILL.md) installs to
+`~/.claude/skills/`, which is per-user rather than per-project — the command is on your `PATH`
+for every repository, so the skill that mentions it should be too. It carries when a report is
+worth sending, the flags, and the two traps above.
+
+Its description is written to match reporting situations only — a finished run, an unattended
+job, an explicit ask — and not any mention of Slack, because a skill that loads in every session
+is a skill whose triggers are worth being narrow about.
 
 ## Retuning the appearance
 

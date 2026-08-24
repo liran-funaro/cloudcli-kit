@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Post a report to Slack through a Workflow Builder webhook trigger.
+#
+#   cloudcli-slack-report -t TITLE -m MESSAGE [-s SUMMARY|-] [options]
+#
+#   -t, --title        one-line headline                          (required)
+#   -m, --message      short status line, :emoji: renders         (required)
+#   -s, --summary      detail block; "-" or a pipe reads stdin
+#   -d, --detail-url   URL for a "Details" button
+#   -p, --pr-url       URL for a "Pull request" button
+#   -D, --directive-url URL for a "Send directive" button
+#   -c, --commit       sha for the "Commit" button                (default HEAD)
+#   -C, --repo-dir     git directory to read repo/branch from    (default: cwd)
+#   -r, --repo         repo name                       (default: from git remote)
+#   -b, --branch       branch name                     (default: from git HEAD)
+#   -n, --dry-run      print the payload, send nothing
+#
+# Outside a git repository (a systemd unit, say) pass -C, or the repo-relative
+# buttons have nothing to point at and fall back to the control repo.
+#
+#   SLACK_REPORT_URL             the webhook trigger URL (required to send)
+#   CLOUDCLI_AGENT_CONTROL_REPO  host/owner/name; the fallback for the
+#                                "Send directive" button
+#
+# The trigger must declare Text variables: title, message, summary, repo, branch,
+# and whichever of link_pr, link_checks, link_commit, link_detail, link_directive
+# you gave buttons to. Undeclared keys are ignored, so declare the subset you
+# want and leave the rest -- but every DECLARED variable must arrive non-empty,
+# which is why each URL below always resolves to a live page.
+#
+# Styling belongs in the workflow editor, not here: text passed through a
+# variable keeps newlines, indentation and :emoji: but NOT *bold*.
+set -uo pipefail
+
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next }
+               NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
+
+title=""; message=""; summary=""; repo=""; branch=""
+detail_url=""; pr_url=""; directive_url=""; commit=""; repo_dir=""; dry=0; have_summary=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t|--title)          title=${2-};         shift 2 ;;
+    -m|--message)        message=${2-};       shift 2 ;;
+    -s|--summary)        summary=${2-}; have_summary=1; shift 2 ;;
+    -d|--detail-url)     detail_url=${2-};    shift 2 ;;
+    -p|--pr-url)         pr_url=${2-};        shift 2 ;;
+    -D|--directive-url)  directive_url=${2-}; shift 2 ;;
+    -c|--commit)         commit=${2-};        shift 2 ;;
+    -C|--repo-dir)       repo_dir=${2-};      shift 2 ;;
+    -r|--repo)           repo=${2-};          shift 2 ;;
+    -b|--branch)         branch=${2-};        shift 2 ;;
+    -n|--dry-run)        dry=1; shift ;;
+    -h|--help)           usage; exit 0 ;;
+    *) printf 'cloudcli-slack-report: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+[ -n "$title" ]   || { echo "cloudcli-slack-report: --title is required" >&2; exit 2; }
+[ -n "$message" ] || { echo "cloudcli-slack-report: --message is required" >&2; exit 2; }
+
+if [ "$summary" = "-" ] || { [ "$have_summary" -eq 0 ] && [ ! -t 0 ]; }; then
+  summary=$(cat)
+fi
+
+# Host comes from the remote, not a constant: a GitHub Enterprise remote must
+# produce Enterprise links, or every button points at the wrong server.
+# git is asked about an explicit directory when given one: a unit's cwd is not
+# the repository being reported on.
+if [ -n "$repo_dir" ]; then set -- -C "$repo_dir"; else set --; fi
+remote=$(git "$@" remote get-url origin 2>/dev/null)
+host=$(printf '%s' "$remote" | sed -nE 's#^git@([^:]+):.*#\1#p; s#^https?://([^/]+)/.*#\1#p' | head -1)
+slug=$(printf '%s' "$remote" | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#\.git$##')
+[ -n "$host" ] || host="github.com"
+[ -n "$repo" ]   || repo=$(basename "${slug:-}")
+[ -n "$branch" ] || branch=$(git "$@" rev-parse --abbrev-ref HEAD 2>/dev/null)
+sha=$(git "$@" rev-parse HEAD 2>/dev/null); [ -n "$commit" ] && sha="$commit"
+
+[ -n "$repo" ]    || repo="n/a"
+[ -n "$branch" ]  || branch="n/a"
+[ -n "$summary" ] || summary="—"
+
+bq=$(printf '%s' "$branch" | sed 's/%/%25/g; s/ /%20/g')
+
+# Where a repo-relative button points when there is no repository to relate to.
+# Inventing https://host/tree/n-a would give a button that looks fine and 404s,
+# so the fallback is a page that exists.
+if [ -n "${CLOUDCLI_AGENT_CONTROL_REPO:-}" ]; then
+  no_repo="https://${CLOUDCLI_AGENT_CONTROL_REPO#https://}/issues"
+else
+  no_repo="https://$host"
+fi
+
+if [ -n "$slug" ]; then
+  base="https://$host/$slug"
+  link_detail="$detail_url"; [ -n "$link_detail" ] || link_detail="$base/tree/$branch"
+  link_commit="$base/tree/$branch"; [ -n "$sha" ] && link_commit="$base/commit/$sha"
+  link_checks="$base/actions?query=branch%3A$bq"
+  link_pr="$pr_url"
+  if [ -z "$link_pr" ]; then
+    link_pr=$(timeout 6 gh "$@" pr view --json url -q .url 2>/dev/null)
+    [ -n "$link_pr" ] || link_pr="$base/compare/$branch?expand=1"
+  fi
+else
+  echo "cloudcli-slack-report: no git remote (pass -C DIR); repo buttons fall back" >&2
+  base="$no_repo"
+  link_detail="${detail_url:-$no_repo}"
+  link_commit="$no_repo"
+  link_checks="$no_repo"
+  link_pr="${pr_url:-$no_repo}"
+fi
+link_directive="$directive_url"
+if [ -z "$link_directive" ]; then
+  link_directive=$(command -v claude-task >/dev/null 2>&1 && claude-task current 2>/dev/null)
+fi
+if [ -z "$link_directive" ] && [ -n "${CLOUDCLI_AGENT_CONTROL_REPO:-}" ]; then
+  link_directive="https://${CLOUDCLI_AGENT_CONTROL_REPO#https://}/issues"
+fi
+[ -n "$link_directive" ] || link_directive="$no_repo"
+
+for u in "$link_detail" "$link_commit" "$link_checks" "$link_pr" "$link_directive"; do
+  case "$u" in http://*|https://*) ;; *)
+    printf 'cloudcli-slack-report: computed a non-URL link: %s\n' "$u" >&2; exit 2 ;;
+  esac
+done
+
+max=2800
+if [ "${#summary}" -gt "$max" ]; then
+  summary="${summary:0:$max}"$'\n…truncated'
+fi
+
+payload=$(jq -n \
+  --arg title "$title" --arg message "$message" --arg summary "$summary" \
+  --arg repo "$repo" --arg branch "$branch" \
+  --arg link_pr "$link_pr" --arg link_checks "$link_checks" \
+  --arg link_commit "$link_commit" --arg link_detail "$link_detail" \
+  --arg link_directive "$link_directive" \
+  '{$title,$message,$summary,$repo,$branch,$link_pr,$link_checks,$link_commit,$link_detail,$link_directive}')
+
+if [ "$dry" -eq 1 ]; then printf '%s\n' "$payload"; exit 0; fi
+
+if [ -z "${SLACK_REPORT_URL:-}" ]; then
+  echo "cloudcli-slack-report: SLACK_REPORT_URL is not set" >&2; exit 3
+fi
+
+body=$(mktemp)
+code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 20 -X POST "$SLACK_REPORT_URL" \
+  -H 'Content-type: application/json' --data-binary "$payload")
+
+# The trigger answers 200 with {"ok":true}; anything else is a failure worth
+# showing, because a silent one looks exactly like a delivered report.
+if [ "$code" = "200" ] && grep -q '"ok":[[:space:]]*true' "$body"; then
+  echo "cloudcli-slack-report: sent"; rm -f "$body"; exit 0
+fi
+printf 'cloudcli-slack-report: FAILED (http %s)\n' "$code" >&2
+head -c 500 "$body" >&2; echo >&2; rm -f "$body"; exit 1

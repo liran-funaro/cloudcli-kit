@@ -7,10 +7,13 @@
 #   ~/bin/cloudcli-start               applies it to the package on every start,
 #                                      so an upgrade cannot revert it
 #   ~/bin/cloudcli-cost                writes the LiteLLM spend report
+#   ~/bin/cloudcli-slack-report        posts a report to a Slack workflow webhook
+#   ~/.claude/skills/reporting-to-slack  teaches every Claude Code session to use it
 #   ~/.claude-code-ui/plugins/cost/    the tab that shows it
 #
 #   --force        overwrite ide-theme.css with the repo's copy (backs up first)
 #   --no-cost      skip the Cost tab and its report script
+#   --no-slack     skip the Slack report script and its skill
 #   --no-apply     install the files but do not touch the package yet
 #
 # Never restarts anything: the running server and any in-flight session are left
@@ -21,14 +24,17 @@ REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONF="${CLOUDCLI_CONF:-$HOME/.config/cloudcli}"
 BIN="${CLOUDCLI_BIN:-$HOME/bin}"
 PLUGINS="$HOME/.claude-code-ui/plugins"
+SKILLS="${CLAUDE_SKILLS:-$HOME/.claude/skills}"
 FORCE=0
 APPLY=1
 COST=1
+SLACK=1
 
 for arg in "$@"; do
   case $arg in
     --force) FORCE=1 ;;
     --no-cost) COST=0 ;;
+    --no-slack) SLACK=0 ;;
     --no-apply) APPLY=0 ;;
     # The header comment above IS the help text, printed up to the first line
     # of code -- so editing one can never leave the other behind.
@@ -126,6 +132,34 @@ if [[ $COST == 1 ]]; then
     echo "    cp $REPO/systemd/cloudcli-cost.{service,timer} ~/.config/systemd/user/"
     echo "    systemctl --user daemon-reload && systemctl --user enable --now cloudcli-cost.timer"
   fi
+fi
+
+# --- the Slack report command ------------------------------------------------
+# A plain command rather than anything the server knows about: the trigger URL is
+# a credential, so it stays in the environment, and nothing here needs it until
+# something actually sends. Useful on its own, and what the task monitor calls to
+# report a finished run.
+if [[ $SLACK == 1 ]]; then
+  echo "slack report:"
+  cp -f "$REPO/notify/cloudcli-slack-report" "$BIN/cloudcli-slack-report"
+  chmod +x "$BIN/cloudcli-slack-report"
+  echo "  installed $BIN/cloudcli-slack-report"
+  if [[ -z ${SLACK_REPORT_URL:-} ]]; then
+    echo "  note: no SLACK_REPORT_URL in this shell, so sending will fail until"
+    echo "  it is exported (a Workflow Builder webhook trigger URL); --dry-run"
+    echo "  works without it"
+  fi
+  for dep in jq curl; do
+    command -v "$dep" >/dev/null 2>&1 || echo "  note: $dep is not installed and is required"
+  done
+
+  # The skill is how a Claude Code session learns the command exists. It goes in
+  # the personal skills directory, so it applies to every session on this machine
+  # rather than one project -- which is also why its description is written to
+  # match reporting situations only, and not to fire on any mention of Slack.
+  mkdir -p "$SKILLS/reporting-to-slack"
+  cp -f "$REPO/skills/reporting-to-slack/SKILL.md" "$SKILLS/reporting-to-slack/SKILL.md"
+  echo "  installed $SKILLS/reporting-to-slack -- available to all Claude Code sessions"
 fi
 
 # --- apply to the installed package -----------------------------------------
