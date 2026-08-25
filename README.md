@@ -777,21 +777,31 @@ part of its input. Every one of the 18,200 usage records in the CLI's own
 transcripts carries all four fields, so their absence is the signal — and a `result`
 is let through by name as a backstop, in case a future release stops sending them.
 
-**No reading at all.** The chip renders unconditionally and computes its number as
-`used || input + output`, so given nothing it prints `0 tokens`; upstream's own
-formatter maps anything `<= 0` to `"0"`. And nothing is what it has after a reload, a
-session switch, or a server restart, because live events were its only source — a
-Claude session's history carried no usage at all, where the Codex provider's already
-does.
+**No reading, and something worse than none.** The chip renders unconditionally and
+computes its number as `used || input + output`, so given nothing it prints `0 tokens`;
+upstream's own formatter maps anything `<= 0` to `"0"`. That accounts for the gap between
+switching to a session and its numbers arriving — but not for a counter that drops to zero
+*after every completed turn*, which is [upstream issue
+#1182](https://github.com/siteboon/claudecodeui/issues/1182): the frontend's session slot is
+initialised with `tokenUsage: null`, and all three consumers gate on `!== undefined`, so every
+history refresh writes that `null` straight over a live reading. A Claude session's history
+carried no usage of its own to displace it with, where the Codex provider's already does.
 
-Two halves to that one. The server sends a reading with the history: `fetchHistory`
-has just read the whole transcript, and the last usage recorded there is precisely
-what the live counter last showed, so it goes out on the same `tokenUsage` field
-Codex uses, which the sessions service spreads through and the frontend store
-already carries — no new route, no new state. And the chip gets an *unknown* state:
-a dash, not a zero, for the moment between switching to a session and its history
-arriving. The button stays where it is and still opens the token dialog; it just
-stops asserting a number it does not have.
+Two halves here, and neither is the whole fix. The server sends a reading with the history:
+`fetchHistory` has just read the whole transcript, and the last usage recorded there is
+precisely what the live counter last showed, so it goes out on the same `tokenUsage` field Codex
+uses, which the sessions service spreads through and the frontend store already carries — no new
+route, no new state. That turns the clobber into a write of the right number. And the chip gets
+an *unknown* state: a dash, not a zero, for the moment before any of it has arrived. The button
+stays where it is and still opens the token dialog; it just stops asserting a number it does not
+have.
+
+What this does **not** claim is the cold open. Upstream already serves that: the frontend
+fetches `GET /api/providers/sessions/:id/token-usage` on every session change, and
+`readClaudeTokenUsage` scans the transcript backwards exactly as this does. Measured against it
+over all 21 transcripts here, the two agree on 19 and neither finds a reading in the other 2.
+The one thing that reader can still get wrong is the shape above: it breaks at the last
+assistant record carrying a usage object, and a `<synthetic>` record carries one full of zeros.
 
 While reading all this: the window being measured against was `CONTEXT_WINDOW`,
 whose default is 160,000 — so a 1M-context model spent every long session measured
@@ -804,8 +814,8 @@ fallback for any message that reports none, and its 160,000 the last resort.
 Verified against the same transcripts: all 54 synthetic records publish nothing while
 all 18,146 real readings are unchanged; the mid-turn shape captured from a live turn
 publishes nothing and its `result` publishes 38,917; 19 of 21 sessions report a
-reading from history — 64,447 to 824,336 tokens — where before every one opened at
-zero; and the chip, run out of the deployed bundle with a stub renderer, shows a dash
+reading from history, 64,447 to 824,336 tokens, agreeing with upstream's own reader
+on every one of them; and the chip, run out of the deployed bundle with a stub renderer, shows a dash
 for no reading and upstream's own rounding for every real one. The two sessions that
 report nothing have no real turn in them, and for those a dash is the truth.
 
