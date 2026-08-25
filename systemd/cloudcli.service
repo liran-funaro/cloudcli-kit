@@ -17,6 +17,10 @@ Environment=PORT=3001
 # back the one read the file-tree API is allowed to make outside a project root,
 # which is what opens a report an agent wrote into /tmp.
 # Environment=CLOUDCLI_LINKS=0
+# The token counter measures against CONTEXT_WINDOW, which upstream defaults to
+# 160000. Name your model's real window here or the dialog reports that default
+# as fact -- a 1M-context model spends most of a long session above it.
+# Environment=CONTEXT_WINDOW=1000000
 # Login shell so PATH/node and the Claude gateway env from ~/.bashrc apply.
 ExecStart=/bin/bash -lc '%h/bin/cloudcli-start'
 Restart=on-failure

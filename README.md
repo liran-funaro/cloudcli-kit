@@ -728,6 +728,42 @@ file reads: applied
 Like every server-side patch, this one lands on the next server start; the browser half is live
 on the next reload.
 
+## The token counter, and what an interrupt did to it
+
+The number beside the composer is fed by one helper that runs over every message
+the CLI sends and publishes whatever usage it finds in it. For a real API call that
+reading is fair: direct input, cache creation, cache reads and output, added up
+against a context window.
+
+The CLI also writes messages of its own, though — model `<synthetic>`, one for the
+interrupt notice, one for an API error, one for the usage-limit line — and those
+carry a usage object with zeros in every field. Upstream publishes it like any
+other, so the counter drops to `0` and stays there until the next real turn. Press
+Stop, and the session that was holding half a million tokens says it is holding
+none.
+
+Counted rather than assumed, over every transcript on this machine: **48 of 17,793
+usage-bearing records** would push a number under 5,000 into the counter, and all 48
+are that one shape. So the fix is one guard, in both readers of that helper: a
+payload with no input tokens at all is not a measurement of a context, it is the
+absence of one, and the honest thing to publish for it is nothing — which leaves the
+last real reading standing. Verified against those same records: all 48 now publish
+nothing, and all 17,760 real readings are unchanged.
+
+```
+chat: applied ..., token counter, token counter fallback, ...
+```
+
+Not gated on any flag — it removes a wrong number and adds none. Like every server
+patch, it lands on the next restart.
+
+While reading that helper: the context window it measures against is
+`CONTEXT_WINDOW`, and its default is 160,000. A deployment running a 1M-context
+model will see turns of 900k tokens measured against 160k, so the *Context window*
+row in the token dialog reads 160K when it is not. That one is upstream's own
+environment variable rather than anything the kit patches — set it where the rest of
+the environment is set, and it says what your model actually has.
+
 ## The Cost tab
 
 A LiteLLM proxy bills per token, and nothing in CloudCLI knows that. So the kit

@@ -1706,6 +1706,53 @@ RESUME = [
      '        kitPushers.set(queryInstance, heldPrompt.push);\n' + RESUME_CLOSURE, 1),
 ]
 
+# --- patch 12 ---------------------------------------------------------------
+# The token counter beside the composer is fed by extractTokenBudget, which runs
+# over EVERY message the CLI sends and publishes whatever usage it finds. Most
+# of those are real API calls, and the number it derives -- direct input, cache
+# creation, cache reads and output -- is a fair reading of the context.
+#
+# But the CLI also writes messages of its own: model "<synthetic>", one for the
+# interrupt notice, one for an API error, one for the usage-limit line. Those
+# carry a usage object with zeros in every field, and zeros are what the counter
+# then shows, until the next real turn refreshes it. Measured over every
+# transcript on this machine: 48 of 17,793 usage-bearing records would push a
+# number under 5,000 into it, and all 48 are that one shape.
+#
+# There is no context window without an input, so a payload with no input tokens
+# at all is not a measurement -- it is the absence of one, and the honest thing
+# to publish for it is nothing, which leaves the last real reading standing.
+# Both readers get the guard: the message-usage path above and the older
+# modelUsage fallback below.
+BUDGET = [
+    ('token counter',
+     '        const outputTokens = readNumber(messageUsage.output_tokens '
+     '?? messageUsage.outputTokens);\n'
+     '        const totalUsed = inputTokens + outputTokens;\n',
+     '        const outputTokens = readNumber(messageUsage.output_tokens '
+     '?? messageUsage.outputTokens);\n'
+     '        // KIT: no input at all means this is not a measurement of a\n'
+     '        // context -- it is one of the messages the CLI writes itself\n'
+     '        // (model "<synthetic>": the interrupt notice, an API error, the\n'
+     '        // usage-limit line), whose usage is zeros throughout. Publishing\n'
+     '        // it resets the counter to 0 until the next real turn.\n'
+     '        if (!inputTokens) {\n'
+     '            return null;\n'
+     '        }\n'
+     '        const totalUsed = inputTokens + outputTokens;\n', 1),
+    ('token counter fallback',
+     '    const outputTokens = readNumber(modelData.cumulativeOutputTokens '
+     '?? modelData.outputTokens);\n'
+     '    const totalUsed = inputTokens + outputTokens;\n',
+     '    const outputTokens = readNumber(modelData.cumulativeOutputTokens '
+     '?? modelData.outputTokens);\n'
+     '    // KIT: as above -- nothing to publish rather than a zero.\n'
+     '    if (!inputTokens) {\n'
+     '        return null;\n'
+     '    }\n'
+     '    const totalUsed = inputTokens + outputTokens;\n', 1),
+]
+
 SESSION_MAP = '/**\n * Adds a session to the active sessions map\n'
 
 # (label, old, new, anchor count) -- run forward with CLOUDCLI_STEER=1 and in
@@ -1846,6 +1893,17 @@ if waiting is None:
           file=sys.stderr)
 else:
     runtime = waiting
+
+# Patch 12 stands alone from all of it: one guard in a helper nothing else
+# reads. Its own copy, so a moved anchor costs this patch and no other.
+budget = runtime
+for label, old, new, count in BUDGET:
+    budget = edit(budget, old, new, label, count)
+if budget is None:
+    print('  token counter NOT applied -- anchors moved; a synthetic message can '
+          'still zero it', file=sys.stderr)
+else:
+    runtime = budget
 
 if steer:
     for label, old, new, count in RUNTIME:

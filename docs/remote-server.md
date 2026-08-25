@@ -147,6 +147,7 @@ into the journal:
 | [compaction](../README.md#compaction-said-out-loud) | drawn where it happens, with the summary folded in |
 | [waiting](../README.md#waiting-said-out-loud) | a turn held open for background work says so, and your next message goes into the same process |
 | [clickable paths](../README.md#a-path-in-the-chat-clickable) | a file path in a message opens the file, including one an agent wrote outside the project |
+| [the token counter](../README.md#the-token-counter-and-what-an-interrupt-did-to-it) | a message the CLI wrote itself, whose usage is all zeros, no longer resets it |
 
 Each is anchored on text upstream chose, so a later CloudCLI release can move an anchor: that
 patch then reports `MISSING`, the rest still apply, and nothing is left half-edited — see [the
