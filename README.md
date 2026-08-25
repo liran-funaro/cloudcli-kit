@@ -756,26 +756,42 @@ Counted over every transcript on this machine: **54 of 18,200 usage-bearing reco
 would push a number under 5,000 into it, and all 54 are that one shape — the lowest
 real reading in the corpus is 42,535, so the floor is not a matter of judgement.
 
-**A mid-turn message that has only counted half.** This is the `2 tokens` seen while
-a turn is thinking. Captured from a real turn, the assistant message the CLI sends
-mid-turn carries `{input_tokens: 5473, output_tokens: 0}` — and *nothing else*: no
-`cache_creation_input_tokens`, no `cache_read_input_tokens`. Its input is therefore
-the **uncached remainder**, which against a warm cache is two or three tokens, and
-its output has not been counted yet. The complete account arrives with the turn's
-`result`:
+**Two frames, and neither one is a context reading.** This is the `2 tokens` seen while a
+turn is thinking. A five-call turn, captured on this deployment:
 
 ```
-assistant  usage: {input_tokens: 5473, output_tokens: 0}                     -> 5,473
-result     usage: {input_tokens: 5473, cache_creation: 33440,
-                   cache_read: 0, output_tokens: 4}                          -> 38,917
+assistant  keys=[input_tokens, output_tokens]                                 ->   5,473
+assistant  keys=[input_tokens, output_tokens]                                 ->   5,473
+assistant  keys=[input_tokens, output_tokens]                                 ->       2
+assistant  keys=[input_tokens, output_tokens]                                 ->       2
+assistant  keys=[input_tokens, output_tokens]                                 ->       2
+result     input=5479 cache_creation=39270 cache_read=111775 output=312       -> 156,836
+           iterations: 0                    modelUsage.contextWindow: 1000000
 ```
 
-Both of those are answered by one rule rather than by a threshold: **a payload that
-is not a complete account is not a reading.** No input at all is a message the CLI
-wrote itself; no cache fields at all is a mid-turn message that has counted only
-part of its input. Every one of the 18,200 usage records in the CLI's own
-transcripts carries all four fields, so their absence is the signal — and a `result`
-is let through by name as a backstop, in case a future release stops sending them.
+The mid-turn frames carry `input_tokens` and `output_tokens` and *nothing else* — no
+`cache_creation_input_tokens`, no `cache_read_input_tokens` — so what they report is the
+**uncached remainder**, two or three tokens once the cache is warm, with the output not counted
+yet. And the `result` is not the corrected version of them: it is a **sum over every call in
+the turn**. That 156,836 is a conversation that ended on nearer 45,000 — the count of calls,
+not the size of the context. Publishing either is a wrong number, in opposite directions, and
+the second one is the one this kit published for a while and called complete.
+
+One rule, then, and it is about shape rather than size: **a reading has to be a complete
+per-call account.** No input at all is a message the CLI wrote itself. No cache fields at all
+is a frame that has counted only part of its input. Every one of the 18,091 usage records in
+the CLI's own transcripts carries all four fields, so their absence is the signal.
+
+The aggregate is not discarded so much as unpacked: `usage.iterations` holds the per-call
+figures it was summed from, and the newest `message` entry there — past the `compaction` and
+`advisor_message` sub-inferences, whose usage is their own call's — *is* a per-call account.
+Where that array is populated it is the live reading. Where it is empty, which is this stack on
+both captured turns, nothing is published at all and the counter keeps its last complete
+figure, which the transcript supplies through the history refresh below. That shape is
+[thevinchi's, from claudecodeui#1125](https://github.com/siteboon/claudecodeui/pull/1125),
+reached from the aggregate's side; the cache-field test is what that approach needs on a stack
+whose per-call frames arrive partial, and is [issue
+#1208](https://github.com/siteboon/claudecodeui/issues/1208).
 
 **No reading, and something worse than none.** The chip renders unconditionally and
 computes its number as `used || input + output`, so given nothing it prints `0 tokens`;
@@ -812,8 +828,10 @@ and the session's own model is the one being measured. `CONTEXT_WINDOW` stays th
 fallback for any message that reports none, and its 160,000 the last resort.
 
 Verified against the same transcripts: all 54 synthetic records publish nothing while
-all 18,146 real readings are unchanged; the mid-turn shape captured from a live turn
-publishes nothing and its `result` publishes 38,917; 19 of 21 sessions report a
+all 18,455 real readings from the transcripts are unchanged — those carry four
+fields and are per-call, which is why they are the reading of record; the captured
+mid-turn shape publishes nothing, and so does the captured aggregate, while an
+`iterations` array yields its newest `message` entry; 19 of 21 sessions report a
 reading from history, 64,447 to 824,336 tokens, agreeing with upstream's own reader
 on every one of them; and the chip, run out of the deployed bundle with a stub renderer, shows a dash
 for no reading and upstream's own rounding for every real one. The two sessions that

@@ -1784,7 +1784,67 @@ RESUME = [
 # to publish for it is nothing, which leaves the last real reading standing.
 # Both readers get the guard: the message-usage path above and the older
 # modelUsage fallback below.
+# Measured on this deployment, with two captured turns: the streamed assistant
+# frame carries input_tokens and output_tokens and NOTHING else -- so its input is
+# the uncached remainder, which against a warm cache is 2 -- and the result frame
+# carries all four but SUMMED over every API call in the turn. A five-call turn
+# reported 156,836 where the context it ended on was nearer 45,000: the count of
+# calls, not the size of the conversation. Publishing either one is a wrong number
+# on the page, in opposite directions.
+#
+# So a reading has to be a complete PER-CALL account, and the aggregate has a
+# per-call breakdown inside it -- usage.iterations, newest `message` entry, past
+# the `compaction` and `advisor_message` sub-inferences whose usage is their own.
+# Where that array is populated this is the live number; where it is empty (this
+# stack, both turns) nothing is published, and the counter keeps the last complete
+# reading -- which the transcript has, all four fields on all 18,091 of its
+# records, and which reaches the page through the history refresh instead.
+#
+# The shape of the fix is thevinchi's, from claudecodeui#1125, arrived at from the
+# aggregate's side; the cache-field test is what that PR needs to work on a stack
+# whose per-call frames are partial.
 BUDGET = [
+    ('token counter per call',
+     '    const messageUsage = sdkMessage.message?.usage || sdkMessage.usage;\n',
+     '    const messageUsage = kitPerCallUsage(sdkMessage);\n', 1),
+    ('token counter per call reader',
+     'function extractTokenBudget(sdkMessage) {\n',
+     '/**\n'
+     ' * KIT: the per-call usage a context reading can be built from. An assistant\n'
+     ' * frame\'s own usage is already per-call. A top-level one belongs to the\n'
+     ' * terminal result and is summed over every call in the turn, so it overstates\n'
+     ' * the conversation several times over; its iterations array holds the per-call\n'
+     ' * figures it was summed from, and an SDK that does not populate it leaves\n'
+     ' * nothing here to publish.\n'
+     ' */\n'
+     'function kitPerCallUsage(sdkMessage) {\n'
+     '    const perCall = sdkMessage.message?.usage;\n'
+     '    if (perCall && typeof perCall === \'object\') {\n'
+     '        return perCall;\n'
+     '    }\n'
+     '    const aggregate = sdkMessage.usage;\n'
+     '    if (!aggregate || typeof aggregate !== \'object\'\n'
+     '        || !Array.isArray(aggregate.iterations) || !aggregate.iterations.length) {\n'
+     '        return null;\n'
+     '    }\n'
+     '    // The newest main-thread call. A compaction or an advisor message is a\n'
+     '    // call of its own, and its usage is not the conversation\'s.\n'
+     '    let sawTyped = false;\n'
+     '    for (let index = aggregate.iterations.length - 1; index >= 0; index -= 1) {\n'
+     '        const iteration = aggregate.iterations[index];\n'
+     '        if (!iteration || typeof iteration !== \'object\'\n'
+     '            || typeof iteration.type !== \'string\') {\n'
+     '            continue;\n'
+     '        }\n'
+     '        sawTyped = true;\n'
+     '        if (iteration.type === \'message\') {\n'
+     '            return iteration;\n'
+     '        }\n'
+     '    }\n'
+     '    // Entries with no type predate the union; take them at face value.\n'
+     '    return sawTyped ? null : aggregate.iterations[aggregate.iterations.length - 1];\n'
+     '}\n'
+     'function extractTokenBudget(sdkMessage) {\n', 1),
     ('token counter',
      '        const outputTokens = readNumber(messageUsage.output_tokens '
      '?? messageUsage.outputTokens);\n'
@@ -1801,24 +1861,34 @@ BUDGET = [
      '        if (!inputTokens) {\n'
      '            return null;\n'
      '        }\n'
-     '        // And the mid-turn assistant message carries a PARTIAL account:\n'
-     '        // input_tokens and output_tokens only, no cache fields at all, so\n'
-     '        // its input is the uncached remainder -- 2 tokens against a warm\n'
-     '        // cache -- and its output is still 0. The complete account arrives\n'
-     '        // with the turn\'s result, which is also the only message carrying\n'
-     '        // modelUsage. Every one of the 18,091 usage records in the CLI\'s\n'
-     '        // own transcripts has all four fields, so their absence is the\n'
-     '        // signal, and the result is let through by name as a backstop.\n'
+     '        // And a frame with no cache accounting in it has counted only part\n'
+     '        // of its input: input_tokens alone is the UNCACHED remainder, which\n'
+     '        // against a warm cache is 2 or 3, and its output is still 0. Every\n'
+     '        // one of the 18,091 usage records in the CLI\'s own transcripts has\n'
+     '        // all four fields, so their absence is the signal. No exemption for\n'
+     '        // the result: its own usage is a turn total, and what is per-call\n'
+     '        // about it has already been taken out of iterations above.\n'
      '        const kitCounted = messageUsage.cache_creation_input_tokens !== undefined\n'
      '            || messageUsage.cache_read_input_tokens !== undefined\n'
      '            || messageUsage.cacheCreationInputTokens !== undefined\n'
      '            || messageUsage.cacheReadInputTokens !== undefined\n'
      '            || messageUsage.cacheCreationTokens !== undefined\n'
      '            || messageUsage.cacheReadTokens !== undefined;\n'
-     '        if (!kitCounted && sdkMessage.type !== \'result\') {\n'
+     '        if (!kitCounted) {\n'
      '            return null;\n'
      '        }\n'
      '        const totalUsed = inputTokens + outputTokens;\n', 1),
+    # modelUsage is cumulative too -- on the captured turn it equalled the
+    # aggregate to the token -- so it must not become the answer for a result
+    # whose usage was just refused above. The branch stays for what it was for:
+    # a message carrying modelUsage and no usage at all.
+    ('token counter legacy',
+     '    if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== \'object\') {\n',
+     '    // KIT: not a second chance for a usage payload already refused.\n'
+     '    if (sdkMessage.usage || sdkMessage.message?.usage) {\n'
+     '        return null;\n'
+     '    }\n'
+     '    if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== \'object\') {\n', 1),
     ('token counter fallback',
      '    const outputTokens = readNumber(modelData.cumulativeOutputTokens '
      '?? modelData.outputTokens);\n'
