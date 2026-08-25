@@ -919,6 +919,36 @@ if links:
         missing.append('clickable paths (%s matches)'
                        % '/'.join(str(c) for c in counts))
 
+# (12) The token chip, when there is nothing to show. The chip renders
+# unconditionally and computes its number as `used || input + output`, so with no
+# reading at all it has nothing to fall back to and prints `0 tokens` -- for a
+# session holding half a million. That is what it shows for the moment between
+# switching to a session and its history arriving, and it is what it showed for
+# every session before the server learned to send a reading with the history.
+#
+# A dash instead. The button stays where it is and still opens the token dialog;
+# it just stops asserting a number it does not have. A session that genuinely has
+# no turn yet reads the same way, which is honest for that too -- 0 was only ever
+# right by accident there.
+if links:
+    TITLE = re.compile(r'title:`\$\{(\w+)\.toLocaleString\(\)\} tokens used`')
+    NUMBER = re.compile(r'children:(\w+)\((\w+)\)\}\),(\w+)\.jsx\("span",'
+                        r'\{className:"hidden text-muted-foreground/70 sm:inline",'
+                        r'children:"tokens"\}')
+    counts = (len(TITLE.findall(s)), len(NUMBER.findall(s)))
+    if counts == (1, 1):
+        s = TITLE.sub(lambda m: 'title:%s?`${%s.toLocaleString()} tokens used`'
+                      ':"no token usage reported for this session yet"'
+                      % (m.group(1), m.group(1)), s, count=1)
+        s = NUMBER.sub(lambda m: 'children:%s?%s(%s):"\\u2014"}),%s.jsx("span",'
+                       '{className:"hidden text-muted-foreground/70 sm:inline",'
+                       'children:"tokens"}'
+                       % (m.group(2), m.group(1), m.group(2), m.group(3)), s, count=1)
+        applied.append('token chip dash')
+    else:
+        missing.append('token chip dash (%s matches)'
+                       % '/'.join(str(c) for c in counts))
+
 open(out, 'w').write(s)
 for m in missing:
     print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
@@ -1731,12 +1761,31 @@ BUDGET = [
      '        const totalUsed = inputTokens + outputTokens;\n',
      '        const outputTokens = readNumber(messageUsage.output_tokens '
      '?? messageUsage.outputTokens);\n'
-     '        // KIT: no input at all means this is not a measurement of a\n'
-     '        // context -- it is one of the messages the CLI writes itself\n'
-     '        // (model "<synthetic>": the interrupt notice, an API error, the\n'
-     '        // usage-limit line), whose usage is zeros throughout. Publishing\n'
-     '        // it resets the counter to 0 until the next real turn.\n'
+     '        // KIT: two payloads here are not readings of a context, and\n'
+     '        // publishing either is what made the counter jump.\n'
+     '        //\n'
+     '        // No input at all is one of the messages the CLI writes itself --\n'
+     '        // model "<synthetic>": the interrupt notice, an API error, the\n'
+     '        // usage-limit line -- whose usage is zeros throughout, so the\n'
+     '        // counter read 0 until the next real turn.\n'
      '        if (!inputTokens) {\n'
+     '            return null;\n'
+     '        }\n'
+     '        // And the mid-turn assistant message carries a PARTIAL account:\n'
+     '        // input_tokens and output_tokens only, no cache fields at all, so\n'
+     '        // its input is the uncached remainder -- 2 tokens against a warm\n'
+     '        // cache -- and its output is still 0. The complete account arrives\n'
+     '        // with the turn\'s result, which is also the only message carrying\n'
+     '        // modelUsage. Every one of the 18,091 usage records in the CLI\'s\n'
+     '        // own transcripts has all four fields, so their absence is the\n'
+     '        // signal, and the result is let through by name as a backstop.\n'
+     '        const kitCounted = messageUsage.cache_creation_input_tokens !== undefined\n'
+     '            || messageUsage.cache_read_input_tokens !== undefined\n'
+     '            || messageUsage.cacheCreationInputTokens !== undefined\n'
+     '            || messageUsage.cacheReadInputTokens !== undefined\n'
+     '            || messageUsage.cacheCreationTokens !== undefined\n'
+     '            || messageUsage.cacheReadTokens !== undefined;\n'
+     '        if (!kitCounted && sdkMessage.type !== \'result\') {\n'
      '            return null;\n'
      '        }\n'
      '        const totalUsed = inputTokens + outputTokens;\n', 1),
@@ -1751,6 +1800,29 @@ BUDGET = [
      '        return null;\n'
      '    }\n'
      '    const totalUsed = inputTokens + outputTokens;\n', 1),
+    # The result message says what the model's window actually is, per model,
+    # under modelUsage -- so the gauge can stop guessing. CONTEXT_WINDOW stays
+    # the fallback for every message that does not carry one, and its 160000
+    # default stays the last resort. The largest reported window wins: a turn
+    # that also ran a subagent on a smaller model lists both, and the session's
+    # own model is the one being measured.
+    # Twice over, at two indentations: the message-usage branch and the older
+    # modelUsage fallback each compute their own.
+    ('token counter window',
+     '        const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n',
+     '        // KIT: what the CLI says this model holds, before what the\n'
+     '        // environment guesses it holds.\n'
+     '        const kitReportedWindows = Object.values(sdkMessage.modelUsage || {})\n'
+     '            .map((entry) => Number(entry && entry.contextWindow) || 0);\n'
+     '        const contextWindow = Math.max(0, ...kitReportedWindows)\n'
+     '            || parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n', 1),
+    ('token counter window fallback',
+     '    const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n',
+     '    // KIT: as above.\n'
+     '    const kitReportedWindows = Object.values(sdkMessage.modelUsage || {})\n'
+     '        .map((entry) => Number(entry && entry.contextWindow) || 0);\n'
+     '    const contextWindow = Math.max(0, ...kitReportedWindows)\n'
+     '        || parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n', 1),
 ]
 
 SESSION_MAP = '/**\n * Adds a session to the active sessions map\n'
@@ -1885,24 +1957,36 @@ runtime, service, chat = base, open(prs).read(), open(cws).read()
 # steering flag: it adds to a turn's own account of itself and takes nothing
 # away. Applied before the steering edits, and on its own copy, so an anchor that
 # moved here leaves patches 4 and 5 exactly as they were.
-waiting = runtime
-for label, old, new, count in WAIT:
-    waiting = edit(waiting, old, new, label, count)
-if waiting is None:
-    print('  waiting NOT applied -- anchors moved; the other chat patches stand alone',
-          file=sys.stderr)
-else:
+def group(text, edits, warning):
+    """Apply a group of edits to a COPY, all of them or none.
+
+    An edit that lands is recorded as applied by edit() itself, so a later
+    anchor moving in the same group has to take those claims back with the copy
+    -- reporting work that was then discarded is how a patch goes quietly
+    missing while the run says it is fine.
+    """
+    claimed = len(applied)
+    out = text
+    for label, old, new, count in edits:
+        out = edit(out, old, new, label, count)
+    if out is None:
+        del applied[claimed:]
+        print(warning, file=sys.stderr)
+        return None
+    return out
+
+
+waiting = group(runtime, WAIT,
+                '  waiting NOT applied -- anchors moved; the other chat patches stand alone')
+if waiting is not None:
     runtime = waiting
 
-# Patch 12 stands alone from all of it: one guard in a helper nothing else
-# reads. Its own copy, so a moved anchor costs this patch and no other.
-budget = runtime
-for label, old, new, count in BUDGET:
-    budget = edit(budget, old, new, label, count)
-if budget is None:
-    print('  token counter NOT applied -- anchors moved; a synthetic message can '
-          'still zero it', file=sys.stderr)
-else:
+# Patch 12 stands alone from all of it: guards in a helper nothing else reads.
+# Its own copy, so a moved anchor costs this patch and no other.
+budget = group(runtime, BUDGET,
+               '  token counter NOT applied -- anchors moved; a synthetic message or a '
+               'mid-turn one can still displace the number')
+if budget is not None:
     runtime = budget
 
 if steer:
