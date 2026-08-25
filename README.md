@@ -579,6 +579,9 @@ Three things were wrong, so patch 10 is three things.
 assistant row, so the transcript says what the session is doing:
 
 ```
+● Running in the background · errors in deploy.log                        3m 12s
+  ▸ what is running
+
 ● Waiting on 1 background task · up to 42m                          41m 12s left
   ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  ▸ what it is waiting for
 
@@ -593,6 +596,17 @@ it is waiting for rather than just that it waits. Everything it says is in the m
 are CloudCLI's account of its own hold, not records in the CLI's transcript, so a reload after
 the fact shows the transcript's version of events (the CLI's task notifications) rather than
 these.
+
+The first of those rows answers a different question from the rest: not *is this session still
+waiting* but **what has it got running right now**. The CLI keeps that list itself and sends it
+on every change — it is how the hold row knows what to name — but the kit only ever spoke it at
+the hold, so while a turn was still working you had the tool call that armed each piece of work
+and nothing that said which were still outstanding. Now a growing list says so, with an elapsed
+clock and no bar, because at that point there is no deadline to drain towards: the ceiling is
+chosen when the turn ends and the hold begins. Only the newest of these rows survives in the
+view — the browser half drops the ones a later wait row has overtaken — so it reads as the
+current state rather than as a pile of events, and the hold, the report-back or the expiry
+replaces it in turn.
 
 **The wait lasts as long as the work said it needs.** Thirty minutes is upstream's figure for
 work that never reports; it is not a figure the *tools* agree with. The same session armed

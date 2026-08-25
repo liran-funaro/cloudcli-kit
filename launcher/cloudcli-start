@@ -755,7 +755,8 @@ def kit_row_map(m):
         '%(mid)sisCompactSummary:%(it)s.isCompactSummary,'
         'compact:%(it)s.compact,wait:%(it)s.wait};'
         'if(%(it)s.wait){'
-        'if(%(it)s.wait.phase==="holding"&&%(lst)s.indexOf(%(it)s)<_kitWait)continue;'
+        'if((%(it)s.wait.phase==="holding"||%(it)s.wait.phase==="started")'
+        '&&%(lst)s.indexOf(%(it)s)<_kitWait)continue;'
         '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
         'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
         'if(%(it)s.compact||%(it)s.isCompactSummary){'
@@ -785,21 +786,27 @@ def kit_row_row(m):
         # bar drains rather than fills, and only a live wait carries the ticker.
         '%(e)s.wait?%(x)s.jsx("div",{className:"kit-row kit-wait",'
         '...(%(e)s.wait.phase==="holding"?{%(tick)s'
-        '"data-kit-since":%(e)s.timestamp,"data-kit-until":%(e)s.wait.until}:{}),children:'
+        '"data-kit-since":%(e)s.timestamp,"data-kit-until":%(e)s.wait.until}'
+        # No deadline for work that is merely running: an elapsed clock, no bar.
+        ':%(e)s.wait.phase==="started"?{%(tick)s'
+        '"data-kit-since":%(e)s.timestamp}:{}),children:'
         '%(x)s.jsxs("div",{className:"kit-row-body",children:['
         '%(x)s.jsxs("div",{className:"kit-row-line",children:['
         '%(x)s.jsx("span",{className:"kit-row-dot"+('
-        '%(e)s.wait.phase==="holding"?" is-running":'
+        '%(e)s.wait.phase==="holding"||%(e)s.wait.phase==="started"?" is-running":'
         '%(e)s.wait.phase==="expired"?" is-failed":"")}),'
         '%(x)s.jsx("span",{children:%(e)s.content||"Waiting"}),'
         '%(e)s.wait.phase==="holding"?%(x)s.jsx("span",'
-        '{className:"kit-row-num",children:"…"}):null]}),'
+        '{className:"kit-row-num",children:"…"})'
+        ':%(e)s.wait.phase==="started"?%(x)s.jsx("span",'
+        '{className:"kit-row-num",children:"0s"}):null]}),'
         '%(e)s.wait.phase==="holding"?%(x)s.jsx("div",{className:"kit-row-bar",'
         'children:%(x)s.jsx("div",{className:"kit-row-track",children:'
         '%(x)s.jsx("div",{className:"kit-row-fill"})})}):null,'
         '%(e)s.wait.tasks&&%(e)s.wait.tasks.length?'
         '%(x)s.jsxs("details",{className:"kit-row-more",children:['
-        '%(x)s.jsx("summary",{children:"what it is waiting for"}),'
+        '%(x)s.jsx("summary",{children:%(e)s.wait.phase==="started"'
+        '?"what is running":"what it is waiting for"}),'
         '%(x)s.jsx("ul",{className:"kit-row-fold kit-wait-tasks",'
         'children:%(e)s.wait.tasks.map((_w,_i)=>%(x)s.jsx("li",{children:'
         '(_w.task_type||"task")+(_w.description?" · "+_w.description:"")},_i))})]}):null]})}):'
@@ -1517,6 +1524,19 @@ function kitWaitText(tasks, ms) {
     const window = ms >= 90000 ? `${Math.round(ms / 60000)}m` : kitFor(ms);
     return `Waiting on ${what} · up to ${window}`;
 }
+/**
+ * KIT: what is outstanding right now, as the CLI counts it. The single-task case
+ * names the work, because a task's own description is more use than a count; the
+ * fold below the row carries the rest either way.
+ */
+function kitRunningText(tasks) {
+    if (tasks.length === 1) {
+        const only = tasks[0] || {};
+        const what = String(only.description || only.task_type || 'background task');
+        return `Running in the background · ${what.length > 80 ? `${what.slice(0, 79)}…` : what}`;
+    }
+    return `Running in the background · ${tasks.length} tasks`;
+}
 function kitKeptText(tasks) {
     if (tasks.length === 0) {
         return 'Continued in the same process, so the background work survives';
@@ -1599,6 +1619,16 @@ WAIT_TASKS = r'''            // KIT: the CLI's own accounting of outstanding tas
                         `Background work reported back after ${kitFor(Date.now() - kitHoldStartedAt)}`,
                         { phase: 'reported', ms: Date.now() - kitHoldStartedAt }));
                     kitHoldStartedAt = 0;
+                }
+                else if (kitTasks.length > kitWere) {
+                    // KIT: work has just been armed, and nothing said so except the
+                    // tool call that armed it -- which scrolls away, and says
+                    // nothing about what is STILL outstanding once several are
+                    // running. So say what the list now holds. The browser half
+                    // keeps only the newest of these rows, so it reads as the
+                    // current state rather than as a pile of events.
+                    ws.send(kitWaitRow(sid, kitRunningText(kitTasks),
+                        { phase: 'started', tasks: kitTasks }));
                 }
             }
             if (startsBackgroundWork(message)) {

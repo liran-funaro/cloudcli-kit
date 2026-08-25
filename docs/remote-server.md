@@ -145,7 +145,7 @@ into the journal:
 | [a Stop that always stops](../README.md#a-stop-that-always-stops) | an interrupt that cannot wedge on a CLI that has stopped reading |
 | [steering](../README.md#steering-a-turn-in-flight) | a message typed mid-turn changes course in that same turn |
 | [compaction](../README.md#compaction-said-out-loud) | drawn where it happens, with the summary folded in |
-| [waiting](../README.md#waiting-said-out-loud) | a turn held open for background work says so, and your next message goes into the same process |
+| [waiting](../README.md#waiting-said-out-loud) | what the session has running says so while it runs, a turn held open for it says so, and your next message goes into the same process |
 | [clickable paths](../README.md#a-path-in-the-chat-clickable) | a file path in a message opens the file, including one an agent wrote outside the project |
 | [the token counter](../README.md#the-token-counter-and-the-three-ways-it-read-wrong) | only a complete account is published, history supplies one after a reload, and the window comes from what the CLI says the model holds |
 
