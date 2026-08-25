@@ -547,7 +547,7 @@ account of itself and takes nothing away. Like the patches above it, the server 
 the next server start:
 
 ```
-compaction: applied
+sessions: applied compaction, history token counter
 ```
 
 ## Waiting, said out loud
@@ -728,41 +728,63 @@ file reads: applied
 Like every server-side patch, this one lands on the next server start; the browser half is live
 on the next reload.
 
-## The token counter, and what an interrupt did to it
+## The token counter, and the two ways it read 0
 
-The number beside the composer is fed by one helper that runs over every message
-the CLI sends and publishes whatever usage it finds in it. For a real API call that
-reading is fair: direct input, cache creation, cache reads and output, added up
-against a context window.
+The number beside the composer had two ways to be wrong, and both of them said `0`
+for a session holding half a million tokens.
 
-The CLI also writes messages of its own, though — model `<synthetic>`, one for the
-interrupt notice, one for an API error, one for the usage-limit line — and those
-carry a usage object with zeros in every field. Upstream publishes it like any
-other, so the counter drops to `0` and stays there until the next real turn. Press
-Stop, and the session that was holding half a million tokens says it is holding
-none.
+**A message the CLI wrote itself.** The counter is republished from every message
+carrying a usage object, and for a real API call that reading is fair: direct
+input, cache creation, cache reads and output, against a context window. But the
+CLI also writes messages of its own — model `<synthetic>`, one for the interrupt
+notice, one for an API error, one for the usage-limit line — and those carry a
+usage object with zeros in every field. Upstream published it like any other, so
+pressing Stop zeroed the counter until the next real turn.
 
 Counted rather than assumed, over every transcript on this machine: **48 of 17,793
 usage-bearing records** would push a number under 5,000 into the counter, and all 48
-are that one shape. So the fix is one guard, in both readers of that helper: a
-payload with no input tokens at all is not a measurement of a context, it is the
-absence of one, and the honest thing to publish for it is nothing — which leaves the
-last real reading standing. Verified against those same records: all 48 now publish
-nothing, and all 17,760 real readings are unchanged.
+are that one shape — the lowest real reading in the corpus is 42,535, so the floor
+is not a matter of judgement. The guard is therefore the narrow semantic one rather
+than a test for the model name: a payload with **no input tokens at all** is not a
+measurement of a context, it is the absence of one, and the honest thing to publish
+for it is nothing, which leaves the last real reading standing. That also covers a
+payload carrying output alone, which is the other way a small number arrives.
+
+**No reading at all.** The chip renders unconditionally and has no *unknown* state:
+given nothing it prints `0 tokens`. And nothing is exactly what it has after a
+reload, a session switch or a server restart, because live events are its only
+source — a Claude session's history carried no usage at all, where the Codex
+provider's already does.
+
+So the second fix sends one: `fetchHistory` has just read the whole transcript, and
+the last usage the CLI recorded there is precisely what the live counter last
+showed. It goes out on the same `tokenUsage` field the Codex provider already uses
+and the frontend store already carries through — no new route, no new state,
+nothing to reconcile. The same two exclusions apply: a record with no input tokens
+is one the CLI wrote itself, and a subagent's record measures its own context
+rather than the session's.
+
+Verified against those same transcripts: all 48 synthetic records now publish
+nothing while all 17,771 real readings are unchanged, and 19 of 21 sessions report a
+reading from history — 64,447 to 824,336 tokens — where before every one of them
+opened at zero. The two that report nothing have no real turn in them, and for those
+`0` is the truth.
 
 ```
 chat: applied ..., token counter, token counter fallback, ...
+sessions: applied compaction, history token counter
 ```
 
-Not gated on any flag — it removes a wrong number and adds none. Like every server
-patch, it lands on the next restart.
+Neither half is gated on a flag: together they remove a wrong number and add none.
+Both land on the next restart.
 
-While reading that helper: the context window it measures against is
-`CONTEXT_WINDOW`, and its default is 160,000. A deployment running a 1M-context
-model will see turns of 900k tokens measured against 160k, so the *Context window*
-row in the token dialog reads 160K when it is not. That one is upstream's own
-environment variable rather than anything the kit patches — set it where the rest of
-the environment is set, and it says what your model actually has.
+One number they cannot fix from inside: the context window they measure against is
+`CONTEXT_WINDOW`, whose default is 160,000. A deployment running a 1M-context model
+will see turns of 900k tokens measured against 160k, so the *Context window* row in
+the token dialog reads 160K when it is not. That is upstream's own environment
+variable rather than anything the kit patches — set it where the rest of the
+environment is set, as [the unit](systemd/cloudcli.service) does in a comment, and
+it says what your model actually has.
 
 ## The Cost tab
 

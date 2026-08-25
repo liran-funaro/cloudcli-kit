@@ -2072,15 +2072,115 @@ NEW = OLD + '''        // KIT: compaction --------------------------------------
         }
 '''
 
-if 'KIT: compaction' in s:
-    print('compaction: already in place')
-    sys.exit(0)
-if s.count(OLD) != 1:
-    print('  MISSING: compaction (%d anchors) -- upstream moved it' % s.count(OLD),
-          file=sys.stderr)
-    sys.exit(1)
-open(path, 'w').write(s.replace(OLD, NEW, 1))
-print('compaction: applied')
+# --- patch 13 ---------------------------------------------------------------
+# The token counter is fed by live events and by nothing else, so a session that
+# is not mid-turn has nothing feeding it. Its chip renders unconditionally and
+# falls back to a zero state, so a reload, a session switch or a server restart
+# leaves a session holding half a million tokens reporting "0 tokens" until the
+# next turn puts the number back.
+#
+# The reading it wants is already in hand: fetchHistory has just read the whole
+# transcript, and the last usage the CLI recorded there is exactly what the live
+# counter last showed. So it goes out with the history, on the same `tokenUsage`
+# field the Codex provider already sends and the frontend store already carries
+# through -- no new route, no new state, and nothing to reconcile.
+#
+# Same rule as the live path: a record with no input tokens is not a measurement
+# of a context (the CLI's own <synthetic> messages carry zeros in every field),
+# and a subagent's record measures its own context rather than this session's.
+HIST_ANCHOR = ('async function getSessionMessages(sessionId, providerSessionId, '
+               'limit, offset) {\n')
+HIST_HELPER = '''// KIT: the counter after a reload ---------------------------------------------
+// Reads back what the live token counter last showed, out of the transcript this
+// module already parses, so the number survives a reload, a session switch and a
+// server restart instead of falling back to the chip's zero state.
+function kitHistoryTokenUsage(entries) {
+    if (!Array.isArray(entries)) {
+        return null;
+    }
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index];
+        // A subagent's usage is its own context, not this session's.
+        if (!entry || entry.type !== 'assistant' || entry.isSidechain) {
+            continue;
+        }
+        const usage = entry.message?.usage;
+        if (!usage || typeof usage !== 'object') {
+            continue;
+        }
+        const cacheCreationTokens = Number(usage.cache_creation_input_tokens) || 0;
+        const cacheReadTokens = Number(usage.cache_read_input_tokens) || 0;
+        const inputTokens = (Number(usage.input_tokens) || 0)
+            + cacheCreationTokens + cacheReadTokens;
+        // No input at all is one of the messages the CLI wrote itself.
+        if (!inputTokens) {
+            continue;
+        }
+        const outputTokens = Number(usage.output_tokens) || 0;
+        return {
+            used: inputTokens + outputTokens,
+            total: parseInt(process.env.CONTEXT_WINDOW, 10) || 160000,
+            inputTokens,
+            outputTokens,
+            cacheReadTokens,
+            cacheCreationTokens,
+            cacheTokens: cacheCreationTokens + cacheReadTokens,
+            breakdown: { input: inputTokens, output: outputTokens },
+        };
+    }
+    return null;
+}
+'''
+HIST_RETURN = ('        return {\n'
+               '            messages: page,\n'
+               '            total,\n'
+               '            hasMore,\n'
+               '            offset: normalizedOffset,\n'
+               '            limit: normalizedLimit,\n'
+               '        };\n')
+HIST_RETURN_NEW = ('        return {\n'
+                   '            messages: page,\n'
+                   '            total,\n'
+                   '            hasMore,\n'
+                   '            offset: normalizedOffset,\n'
+                   '            limit: normalizedLimit,\n'
+                   '            // KIT: what the token counter had, so it survives the reload.\n'
+                   '            tokenUsage: kitHistoryTokenUsage(rawMessages),\n'
+                   '        };\n')
+
+applied, already, missing = [], [], []
+
+
+def apply(label, marker, pairs):
+    """Apply one feature's edits, all or none. Reports rather than raising."""
+    global s
+    if marker in s:
+        already.append(label)
+        return
+    for old, _new in pairs:
+        if s.count(old) != 1:
+            missing.append('%s (%d anchors)' % (label, s.count(old)))
+            return
+    for old, new in pairs:
+        s = s.replace(old, new, 1)
+    applied.append(label)
+
+
+apply('compaction', 'KIT: compaction', [(OLD, NEW)])
+apply('history token counter', 'KIT: the counter after a reload',
+      [(HIST_ANCHOR, HIST_HELPER + HIST_ANCHOR), (HIST_RETURN, HIST_RETURN_NEW)])
+
+if applied:
+    open(path, 'w').write(s)
+for m in missing:
+    print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
+report = []
+if applied:
+    report.append('applied ' + ', '.join(applied))
+if already:
+    report.append('%s already in place' % ', '.join(already))
+print('sessions: %s' % ('; '.join(report) or 'nothing to do'))
+sys.exit(0 if applied or already else 1)
 PY
   then
     if node --check "$CSP" >/dev/null 2>&1; then
