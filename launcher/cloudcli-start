@@ -2516,6 +2516,82 @@ PY
   fi
 fi
 
+# --- patch 12: a plugin's skills, when it also ships commands ------------------
+# A Claude Code plugin can ship both `commands/` and `skills/`; the CLI reads
+# both. This server reads the first one it finds and skips the other:
+#
+#     if (await pathExistsAsDirectory(commandsPath)) {
+#         skills.push(...(await this.listPluginCommandSkills(...)));
+#         continue;                       // <- skills/ never looked at
+#     }
+#
+# and the commands reader takes `.md` only. So a plugin whose commands are in
+# another format loses BOTH halves: the commands branch matches nothing, and the
+# `continue` walks past the skills sitting next to it. ponytail is exactly that
+# shape -- six `commands/*.toml`, six real skills -- and contributes nothing to
+# the command menu, while `/ponytail:*` works in the terminal. A plugin shipping
+# both properly (claude-md-management) silently loses its skill the same way.
+#
+# Dropping the `continue` is the whole fix: the skills branch below already
+# skips a plugin with no `skills/`, and the menu dedupes by command, so a name
+# in both places is listed once. Nothing is hidden by this patch that upstream
+# shows -- it only stops hiding.
+SKP="$PKG/dist-server/server/modules/providers/list/claude/claude-skills.provider.js"
+if [[ -f $SKP ]]; then
+  # Same self-healing as the sections above: upstream never says KIT, so a file
+  # that does not is the original -- cache it. One that does is ours, so the
+  # original goes back before it is patched again.
+  if ! grep -q KIT "$SKP"; then
+    cp "$SKP" "$SKP.kitorig"
+  elif [[ -f $SKP.kitorig ]]; then
+    cp "$SKP.kitorig" "$SKP"
+    echo "  re-patching the skills provider from the packaged original"
+  fi
+  cp "$SKP" "$SKP.prepatch"
+  if python3 - "$SKP" <<'PY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+
+OLD = """                    if (await pathExistsAsDirectory(commandsPath)) {
+                        skills.push(...(await this.listPluginCommandSkills(commandsPath, pluginId, pluginName)));
+                        continue;
+                    }
+"""
+NEW = """                    // KIT: a plugin can ship commands AND skills, and one whose
+                    // commands are not .md (ponytail's are .toml) lost both here:
+                    // nothing matched, and the `continue` skipped the skills next
+                    // to them. Read both -- the check below still skips a plugin
+                    // with no skills/, and the menu dedupes by command.
+                    if (await pathExistsAsDirectory(commandsPath)) {
+                        skills.push(...(await this.listPluginCommandSkills(commandsPath, pluginId, pluginName)));
+                    }
+"""
+
+if 'KIT: a plugin can ship commands AND skills' in s:
+    print('plugin skills: already in place')
+    sys.exit(0)
+if s.count(OLD) != 1:
+    print('  MISSING: plugin skills (%d anchors) -- upstream moved it'
+          % s.count(OLD), file=sys.stderr)
+    sys.exit(1)
+open(path, 'w').write(s.replace(OLD, NEW, 1))
+print('plugin skills: applied')
+PY
+  then
+    if node --check "$SKP" >/dev/null 2>&1; then
+      rm -f "$SKP.prepatch"
+    else
+      mv "$SKP.prepatch" "$SKP"
+      echo "WARNING: the plugin-skills patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$SKP.prepatch" "$SKP"
+  fi
+fi
+
+
 # --- anchor self-check ------------------------------------------------------
 # Every patch above hangs off something upstream happens to do: a Tailwind
 # class, a CSS variable, a localStorage key. None of that is a published

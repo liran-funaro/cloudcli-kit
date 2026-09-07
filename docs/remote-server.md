@@ -148,6 +148,7 @@ into the journal:
 | [waiting](../README.md#waiting-said-out-loud) | what the session has running says so while it runs, a turn held open for it says so, and your next message goes into the same process |
 | [clickable paths](../README.md#a-path-in-the-chat-clickable) | a file path in a message opens the file, including one an agent wrote outside the project |
 | [the token counter](../README.md#the-token-counter-and-the-three-ways-it-read-wrong) | only a complete account is published, history supplies one after a reload, and the window comes from what the CLI says the model holds |
+| [a plugin's skills](../README.md#a-plugins-skills-when-it-also-ships-commands) | a plugin that ships commands and skills has both listed, instead of losing the skills to the commands folder |
 
 Each is anchored on text upstream chose, so a later CloudCLI release can move an anchor: that
 patch then reports `MISSING`, the rest still apply, and nothing is left half-edited — see [the

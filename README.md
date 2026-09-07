@@ -847,6 +847,37 @@ sessions: applied compaction, history token counter
 None of it is gated on a flag: together it removes wrong numbers and adds none. The
 browser half lands on the next reload, the server halves on the next restart.
 
+## A plugin's skills, when it also ships commands
+
+A Claude Code plugin may ship `commands/`, `skills/`, or both, and the CLI reads both. The
+server read whichever it found first:
+
+```js
+if (await pathExistsAsDirectory(commandsPath)) {
+    skills.push(...(await this.listPluginCommandSkills(...)));
+    continue;                       // <- skills/ never looked at
+}
+```
+
+and the commands reader accepts `.md` only. So a plugin whose commands are in some other format
+lost **both** halves: the commands branch matched nothing, and the `continue` walked straight
+past the skills sitting next to them. `ponytail` is exactly that shape — six `commands/*.toml`
+and six real skills — so `/ponytail:*` worked in the terminal and was absent from the command
+menu, with no error anywhere to say why. A plugin shipping both properly, like
+`claude-md-management`, lost its skill the same way, more quietly.
+
+Dropping the `continue` is the whole patch. The skills branch below it already skips a plugin
+with no `skills/`, and the menu dedupes by command, so a name present in both places is listed
+once:
+
+```
+plugin skills: applied
+```
+
+Not gated on a flag: it hides nothing upstream shows, it only stops hiding. Lands on the next
+restart.
+
+
 ## The Cost tab
 
 A LiteLLM proxy bills per token, and nothing in CloudCLI knows that. So the kit
