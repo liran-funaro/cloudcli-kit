@@ -17,7 +17,10 @@ assert.ok(start > 0 && end > start, 'patched loop not found in the bundle');
 
 // The patch text verbatim, with the switch replaced by a marker tail so the
 // loop closes: this exercises the injected branch, not a transcription of it.
-const body = src.slice(start, end) + 't.push({fellThrough:l.kind});}return t;';
+// The tail stands in for upstream's switch, which pushes each row with its
+// content -- the dedupe below reads that, so the stub has to carry it too.
+const body = src.slice(start, end)
+  + 't.push({fellThrough:l.kind,content:l.content});}return t;';
 const run = new Function('e', 'const t=[],r=new Map,i=new Map,hj=new Map;' + body);
 
 // 1. real compaction rows, straight out of the patched server module
@@ -58,6 +61,34 @@ out = run([
 assert.equal(out.length, 1);
 assert.equal(out[0].compactSummary, 'The summary body');
 
+// 4b. the CLI's unflagged second copy of the summary is not drawn again --
+// after the fold
+out = run([
+  { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
+  { kind: 'text', role: 'assistant', content: 'The summary body', isCompactSummary: true },
+  { kind: 'text', role: 'assistant', content: 'The summary body' },
+]);
+assert.equal(out.length, 1);
+assert.equal(out[0].compactSummary, 'The summary body');
+
+// 4c. ... and before it, where the loose copy has already been pushed
+out = run([
+  { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
+  { kind: 'text', role: 'assistant', content: 'The summary body' },
+  { kind: 'text', role: 'assistant', content: 'The summary body', isCompactSummary: true },
+]);
+assert.equal(out.length, 1);
+assert.equal(out[0].compact.phase, 'done');
+assert.equal(out[0].compactSummary, 'The summary body');
+
+// 4d. an ordinary row that merely follows a compaction is untouched
+out = run([
+  { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
+  { kind: 'text', role: 'assistant', content: 'The summary body', isCompactSummary: true },
+  { kind: 'text', role: 'assistant', content: 'On with the work' },
+]);
+assert.deepEqual(out.map((r) => r.compactSummary || r.fellThrough), ['The summary body', 'text']);
+
 // 5. an orphan summary still gets a row of its own
 out = run([{ kind: 'text', role: 'assistant', content: 'Orphan summary', isCompactSummary: true }]);
 assert.equal(out.length, 1);
@@ -81,6 +112,6 @@ out = run([
   { kind: 'text', role: 'assistant', content: 'hello' },
   { kind: 'tool_use', toolId: 't1', parentToolUseId: 'p1' },
 ]);
-assert.deepEqual(out, [{ fellThrough: 'text' }]);
+assert.deepEqual(out, [{ fellThrough: 'text', content: 'hello' }]);
 
 console.log('all checks passed');

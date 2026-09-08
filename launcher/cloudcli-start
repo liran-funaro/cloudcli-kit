@@ -343,13 +343,29 @@ CLI_CMDS = (
 )
 # namespace:"builtin" is what the menu groups and colours by, so these sit with
 # the app's own built-ins rather than under "Other".
-PROV = kit_names(r'/api/providers/\$\{encodeURIComponent\((\w+)\)\}/skills')
+# The provider has to be named by the function the gate is inserted INTO, not by
+# whichever function happens to fetch skills: 1.37.3 moved that fetch behind an
+# api helper, and the old anchor went on matching -- inside the helper, where the
+# same shape names its own parameter. The gate then compared this hook's
+# `selectedProject` to "claude", was false forever, and the five commands
+# silently stopped being listed. So it is read from the hook's own signature,
+# which is the one place that cannot be a different scope.
+PROV = kit_names(r'function \w+\(\{selectedProject:\w+,provider:(\w+),input:')
 MERGE = re.compile(r'\.\.\.\((\w+)\.custom\|\|\[\]\)\.map\((\w+)=>'
                    r'\(\{\.\.\.\2,type:"custom"\}\)\)\]')
 SKILL = re.compile(r'(\w+)=>\1\.type==="skill"\|\|\1\.metadata\?\.type==="skill"')
 SEND = re.compile(r'if\((\w+)&&\1\.type!=="skill"\)\{')
 counts = [len(MERGE.findall(s)), len(SKILL.findall(s)), len(SEND.findall(s))]
-if PROV and counts == [1, 1, 1]:
+# And the gate has to be inserted into the function that names it. A name read
+# from one scope and used in another is what made this patch report itself
+# applied while listing nothing, so the two sites are required to be the same
+# function: the signature comes first and the list is built a few hundred
+# characters into its body. Drifting apart is now a MISSING line rather than a
+# silent no-op.
+SIG = re.search(r'function \w+\(\{selectedProject:\w+,provider:\w+,input:', s)
+MERGED = MERGE.search(s)
+near = bool(SIG and MERGED and 0 < MERGED.start() - SIG.start() < 4000)
+if PROV and near and counts == [1, 1, 1]:
     # Claude only: these are its commands, and the menu is shared with the other
     # providers, whose runtimes would take them for a prompt.
     s = MERGE.sub(r'...(\1.custom||[]).map(\2=>({...\2,type:"custom"})),'
@@ -359,9 +375,10 @@ if PROV and counts == [1, 1, 1]:
     s = SEND.sub(r'if(\1&&\1.type!=="skill"&&\1.type!=="cli"){', s, count=1)
     applied.append('cli commands')
 else:
-    missing.append('cli commands (%s matches%s)'
+    missing.append('cli commands (%s matches%s%s)'
                    % ('/'.join(str(c) for c in counts),
-                      '' if PROV else ', provider unnamed'))
+                      '' if PROV else ', provider unnamed',
+                      '' if near else ', gate and list in different scopes'))
 
 # (8) Today's spend, permanently on the page. The Cost tab is the report; this
 # is the one number worth seeing without going to look for it, in the sidebar
@@ -506,7 +523,13 @@ def kit_row_map(m):
         # per render, off the same list the loop walks.
         'const _kitDone=%(lst)s.findLastIndex(_x=>_x.compact'
         '&&_x.compact.phase!=="running"),'
-        '_kitWait=%(lst)s.findLastIndex(_x=>_x.wait);'
+        '_kitWait=%(lst)s.findLastIndex(_x=>_x.wait),'
+        # Summary text already folded into a row. The CLI writes the summary
+        # twice -- once as the synthetic row that carries it into the next turn,
+        # once into the stream the browser is watching -- and only one of them is
+        # flagged, so the other arrived as a 20 KB prose bubble beside the row
+        # that had already folded it. Matched on the text, which is identical.
+        '_kitFolded=new Set;'
         'for(const %(it)s of %(lst)s){if(%(it)s.parentToolUseId)continue;'
         # upstream's own tool-result lookup and projection cache, verbatim
         '%(head)s'
@@ -520,14 +543,21 @@ def kit_row_map(m):
         '&&%(lst)s.indexOf(%(it)s)<_kitWait)continue;'
         '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
         'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
+        # Either copy of the summary, whichever order the two arrive in: a later
+        # one is skipped here, an earlier one is dropped when the fold happens.
+        'if(%(it)s.content&&_kitFolded.has(%(it)s.content))continue;'
         'if(%(it)s.compact||%(it)s.isCompactSummary){'
         'const _kitAt=%(out)s[%(out)s.length-1];'
         'if(%(it)s.isCompactSummary){'
+        '_kitFolded.add(%(it)s.content||"");'
+        'if(_kitAt&&!_kitAt.compact&&_kitAt.content===%(it)s.content)'
+        '{%(out)s.pop()}'
         # The summary follows its boundary, so it belongs to the row already
         # drawn. On its own -- a session that compacted before the CLI recorded
         # boundaries -- it still gets a row of its own to fold into.
-        'if(_kitAt&&_kitAt.compact&&!_kitAt.compactSummary)'
-        '{_kitAt.compactSummary=%(it)s.content||"";continue}'
+        'const _kitInto=%(out)s[%(out)s.length-1];'
+        'if(_kitInto&&_kitInto.compact&&!_kitInto.compactSummary)'
+        '{_kitInto.compactSummary=%(it)s.content||"";continue}'
         '%(out)s.push({type:"assistant",content:"",timestamp:%(it)s.timestamp,'
         '...%(ex)s,compact:{phase:"done"},compactSummary:%(it)s.content||""});continue}'
         'if(%(it)s.compact.phase==="running"'
