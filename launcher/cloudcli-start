@@ -529,7 +529,8 @@ def kit_row_map(m):
         # once into the stream the browser is watching -- and only one of them is
         # flagged, so the other arrived as a 20 KB prose bubble beside the row
         # that had already folded it. Matched on the text, which is identical.
-        '_kitFolded=new Set;'
+        '_kitFolded=new Set,'
+        '_kitAnyCompact=%(lst)s.some(_x=>_x.compact);'
         'for(const %(it)s of %(lst)s){if(%(it)s.parentToolUseId)continue;'
         # upstream's own tool-result lookup and projection cache, verbatim
         '%(head)s'
@@ -545,13 +546,24 @@ def kit_row_map(m):
         'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
         # Either copy of the summary, whichever order the two arrive in: a later
         # one is skipped here, an earlier one is dropped when the fold happens.
-        'if(%(it)s.content&&_kitFolded.has(%(it)s.content))continue;'
+        'if(%(it)s.content&&_kitFolded.has(%(it)s.content.trim()))continue;'
+        # The CLI acknowledges a compaction in the stream with the bare word, and
+        # never writes it to the transcript -- so it is live-only, and it says
+        # strictly less than the row this patch draws beside it. Dropped only
+        # when there is such a row: on an unpatched-server session it is all
+        # there is.
+        'if(_kitAnyCompact&&%(it)s.kind==="text"&&%(it)s.role==="assistant"'
+        '&&/^Compacted\.?$/.test((%(it)s.content||"").trim()))continue;'
         'if(%(it)s.compact||%(it)s.isCompactSummary){'
-        'const _kitAt=%(out)s[%(out)s.length-1];'
         'if(%(it)s.isCompactSummary){'
-        '_kitFolded.add(%(it)s.content||"");'
-        'if(_kitAt&&!_kitAt.compact&&_kitAt.content===%(it)s.content)'
-        '{%(out)s.pop()}'
+        'const _kitText=(%(it)s.content||"").trim();_kitFolded.add(_kitText);'
+        # The other copy is wherever the stream put it, which need not be the row
+        # just above: the unflagged one arrives during the turn and the flagged
+        # one with the history that follows it. So it is searched for, newest
+        # first, and only an ordinary row is ever taken out.
+        'for(let _k=%(out)s.length-1;_k>=0;_k-=1){const _r=%(out)s[_k];'
+        'if(!_r.compact&&(_r.content||"").trim()===_kitText)'
+        '{%(out)s.splice(_k,1);break}}'
         # The summary follows its boundary, so it belongs to the row already
         # drawn. On its own -- a session that compacted before the CLI recorded
         # boundaries -- it still gets a row of its own to fold into.
@@ -562,8 +574,16 @@ def kit_row_map(m):
         '...%(ex)s,compact:{phase:"done"},compactSummary:%(it)s.content||""});continue}'
         'if(%(it)s.compact.phase==="running"'
         '&&%(lst)s.indexOf(%(it)s)<_kitDone)continue;'
+        # Live, the summary arrives BEFORE its boundary, so the fold above had
+        # nothing to fold into and made a row of its own. Take it back: this row
+        # says what that one could not, and one compaction is one row either way.
+        'let _kitTook=null;'
+        'for(let _k=%(out)s.length-1;_k>=0;_k-=1){const _r=%(out)s[_k];'
+        'if(_r.compact&&_r.compactSummary&&!_r.content)'
+        '{_kitTook=_r.compactSummary;%(out)s.splice(_k,1);break}}'
         '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
-        'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
+        'timestamp:%(it)s.timestamp,...%(ex)s,'
+        'compactSummary:_kitTook||undefined});continue}'
         # A row this patch pushed never reaches the projection cache below, so it
         # is rebuilt each render -- which is what keeps a live countdown honest.
         'switch(%(it)s.kind){'

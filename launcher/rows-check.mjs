@@ -81,6 +81,16 @@ assert.equal(out.length, 1);
 assert.equal(out[0].compact.phase, 'done');
 assert.equal(out[0].compactSummary, 'The summary body');
 
+// 4c2. the loose copy several rows earlier, which is where a live one lands
+out = run([
+  { kind: 'text', role: 'assistant', content: 'The summary body\n' },
+  { kind: 'text', role: 'assistant', content: 'some work' },
+  { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
+  { kind: 'text', role: 'assistant', content: 'The summary body', isCompactSummary: true },
+]);
+assert.deepEqual(out.map((r) => r.content), ['some work', 'Compacted · auto']);
+assert.equal(out[1].compactSummary, 'The summary body');
+
 // 4d. an ordinary row that merely follows a compaction is untouched
 out = run([
   { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
@@ -88,6 +98,35 @@ out = run([
   { kind: 'text', role: 'assistant', content: 'On with the work' },
 ]);
 assert.deepEqual(out.map((r) => r.compactSummary || r.fellThrough), ['The summary body', 'text']);
+
+// 4e. the live order: the summary arrives BEFORE its boundary, and the two
+// still come out as one row carrying the metrics line
+out = run([
+  { kind: 'text', role: 'assistant', content: 'The summary body', isCompactSummary: true },
+  { kind: 'text', role: 'assistant', content: 'Compacted · manual · 335k → 10k tokens · 2m 22s',
+    compact: { phase: 'done', trigger: 'manual' } },
+]);
+assert.equal(out.length, 1);
+assert.equal(out[0].content, 'Compacted · manual · 335k → 10k tokens · 2m 22s');
+assert.equal(out[0].compactSummary, 'The summary body');
+
+// 4f. the CLI's live-only one-word notice is dropped beside a real row, and
+// kept when there is none (an unpatched server, where it is all there is)
+out = run([
+  { kind: 'text', role: 'assistant', content: 'Compacted' },
+  { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
+]);
+assert.deepEqual(out.map((r) => r.content), ['Compacted · auto']);
+out = run([{ kind: 'text', role: 'assistant', content: 'Compacted' }]);
+assert.deepEqual(out.map((r) => r.content), ['Compacted']);
+
+// 4g. a message that merely mentions the word is untouched
+out = run([
+  { kind: 'text', role: 'assistant', content: 'Compacted the log file for you' },
+  { kind: 'text', role: 'assistant', content: 'Compacted · auto', compact: { phase: 'done' } },
+]);
+assert.deepEqual(out.map((r) => r.content),
+  ['Compacted the log file for you', 'Compacted · auto']);
 
 // 5. an orphan summary still gets a row of its own
 out = run([{ kind: 'text', role: 'assistant', content: 'Orphan summary', isCompactSummary: true }]);
