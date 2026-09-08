@@ -140,7 +140,7 @@ into the journal:
 | | |
 |---|---|
 | [appearance](../README.md#retuning-the-appearance) | your stylesheet, linked after the app's own, plus a generated accent substitution for the blue Tailwind utilities no variable reaches |
-| [nine bundle edits](../README.md#nine-small-edits-in-the-bundle) | sidebar default, model descriptions, ⌘/Ctrl+Enter to send, send while running, the CLI's own slash commands, the cost chip, compaction and wait rows, clickable paths, the token chip (the compaction/wait rows are not applied on 1.37.3) |
+| [nine bundle edits](../README.md#nine-small-edits-in-the-bundle) | sidebar default, model descriptions, ⌘/Ctrl+Enter to send, send while running, the CLI's own slash commands, the cost chip, compaction and wait rows, clickable paths, the token chip |
 | [the model menu](../README.md#the-model-menu) | each option described and priced; options a deployment cannot serve dropped |
 | [a Stop that always stops](../README.md#a-stop-that-always-stops) | an interrupt that cannot wedge on a CLI that has stopped reading |
 | [steering](../README.md#steering-a-turn-in-flight) | a message typed mid-turn changes course in that same turn |

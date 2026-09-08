@@ -451,12 +451,16 @@ else:
 # The numbers tick from a ref callback rather than state, like the cost chip: one
 # interval for the page, started by whichever row mounts first, stopping itself
 # as soon as no row is left to update.
-MAP = re.compile(r'const (\w+)=\[\],(\w+)=new Map,(\w+)=new Set;'
-                 r'for\(const (\w+) of (\w+)\)\4\.kind==="tool_use"&&\4\.toolId'
-                 r'&&\3\.add\(\4\.toolId\),\4\.kind==="tool_result"&&\4\.toolId'
-                 r'&&\2\.set\(\4\.toolId,\4\);for\(const (\w+) of \5\)\{const (\w+)='
-                 r'\{displayText:\6\.displayText,([^}]*?)isCompactSummary:'
-                 r'\6\.isCompactSummary\};switch\(\6\.kind\)\{')
+# 1.37.3 rebuilt this loop around a projection cache and a subagent map, and
+# gave the row template a transcriptAnchorId. Only the second loop is anchored
+# now -- from its header to the switch -- and everything upstream does inside it
+# is carried through untouched, so the patch adds two fields and one branch
+# rather than restating a loop that keeps growing.
+MAP = re.compile(r'for\(const (\w+) of (\w+)\)\{if\(\1\.parentToolUseId\)continue;'
+                 r'([\s\S]{0,400}?)'
+                 r'const (\w+)=(\w+)\.length,(\w+)=\{displayText:\1\.displayText,'
+                 r'([\s\S]{0,400}?)isCompactSummary:\1\.isCompactSummary,'
+                 r'transcriptAnchorId:\1\.transcriptAnchorId\};switch\(\1\.kind\)\{')
 NOTIF = re.compile(r'(\w+)\.isTaskNotification\?(\w+)\.jsx\("div",\{className:"w-full",'
                    r'children:\2\.jsxs\("div",\{className:"flex items-center gap-2 py-0\.5"')
 MD = kit_names(r'\w+\.jsx\((\w+),\{className:"prose prose-sm max-w-none font-serif '
@@ -495,20 +499,21 @@ TICK = (
 
 def kit_row_map(m):
     """Carry both fields, drop an overtaken row, fold the summary into its row."""
-    out, tmap, tset, it1, lst, it, ex, mid = m.groups()
+    it, lst, head, count, out, ex, mid = m.groups()
     return (
-        'const %(out)s=[],%(map)s=new Map,%(set)s=new Set;'
-        'let _kitDone=-1,_kitWait=-1;'
-        'for(const %(it1)s of %(lst)s)'
-        '%(it1)s.kind==="tool_use"&&%(it1)s.toolId&&%(set)s.add(%(it1)s.toolId),'
-        '%(it1)s.kind==="tool_result"&&%(it1)s.toolId&&%(map)s.set(%(it1)s.toolId,%(it1)s),'
         # The last row that reports a finished compaction, and the last wait row
-        # of any kind. A bar or a countdown before either is history.
-        '%(it1)s.compact&&%(it1)s.compact.phase!=="running"'
-        '&&(_kitDone=%(lst)s.indexOf(%(it1)s)),'
-        '%(it1)s.wait&&(_kitWait=%(lst)s.indexOf(%(it1)s));'
-        'for(const %(it)s of %(lst)s){const %(ex)s={displayText:%(it)s.displayText,'
+        # of any kind: a bar or a countdown before either is history. Read once
+        # per render, off the same list the loop walks.
+        'const _kitDone=%(lst)s.findLastIndex(_x=>_x.compact'
+        '&&_x.compact.phase!=="running"),'
+        '_kitWait=%(lst)s.findLastIndex(_x=>_x.wait);'
+        'for(const %(it)s of %(lst)s){if(%(it)s.parentToolUseId)continue;'
+        # upstream's own tool-result lookup and projection cache, verbatim
+        '%(head)s'
+        'const %(count)s=%(out)s.length,%(ex)s={displayText:%(it)s.displayText,'
         '%(mid)sisCompactSummary:%(it)s.isCompactSummary,'
+        'transcriptAnchorId:%(it)s.transcriptAnchorId,'
+        # the two the row is drawn from
         'compact:%(it)s.compact,wait:%(it)s.wait};'
         'if(%(it)s.wait){'
         'if((%(it)s.wait.phase==="holding"||%(it)s.wait.phase==="started")'
@@ -525,12 +530,15 @@ def kit_row_map(m):
         '{_kitAt.compactSummary=%(it)s.content||"";continue}'
         '%(out)s.push({type:"assistant",content:"",timestamp:%(it)s.timestamp,'
         '...%(ex)s,compact:{phase:"done"},compactSummary:%(it)s.content||""});continue}'
-        'if(%(it)s.compact.phase==="running"&&%(lst)s.indexOf(%(it)s)<_kitDone)continue;'
+        'if(%(it)s.compact.phase==="running"'
+        '&&%(lst)s.indexOf(%(it)s)<_kitDone)continue;'
         '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
         'timestamp:%(it)s.timestamp,...%(ex)s});continue}'
+        # A row this patch pushed never reaches the projection cache below, so it
+        # is rebuilt each render -- which is what keeps a live countdown honest.
         'switch(%(it)s.kind){'
-        % {'out': out, 'map': tmap, 'set': tset, 'it1': it1, 'lst': lst,
-           'it': it, 'ex': ex, 'mid': mid})
+        % {'it': it, 'lst': lst, 'head': head, 'count': count,
+           'out': out, 'ex': ex, 'mid': mid})
 
 
 def kit_row_row(m):

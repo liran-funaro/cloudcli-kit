@@ -345,9 +345,9 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 8/9 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, cli commands, cost chip, clickable paths, token chip dash
-  MISSING: compaction and wait rows (0/1 matches) -- upstream moved it
+frontend: 9/9 applied -- sidebar default, model description, ctrl+enter to send,
+send while running, cli commands, cost chip, compaction and wait rows,
+clickable paths, token chip dash
 ```
 
 Nine because three of them belong to patches described below rather than here: *send while
@@ -355,8 +355,6 @@ running* to steering, *clickable paths* to the paths patch and its server half, 
 chip dash* to the token counter. `CLOUDCLI_STEER=0` leaves the first out, `CLOUDCLI_LINKS=0`
 the second, and the count comes down with them.
 
-Eight applied, on 1.37.3, because the ninth is the one edit this release genuinely broke
-rather than moved: see [Compaction, said out loud](#compaction-said-out-loud).
 
 Several are read from more than one anchor, and no minified name is guessed: each comes from a
 site that says which is which — the row that carries the cost chip names the JSX factory, the
@@ -499,12 +497,25 @@ Compacted · auto · 725k → 18k tokens · 2m 56s        ▸ full summary
 message's `content`, so an unpatched bundle renders it as the sentence it is; the `compact`
 field beside it is only how the browser half draws it.
 
-> **On 1.37.3 the browser half is not applied.** #1206 rebuilt the transcript pipeline around a
-> normalizer that constructs each row from an explicit field list, so the `compact` and `wait`
-> fields are dropped before the renderer sees them — a re-port rather than a re-anchor, and not
-> done yet. The server halves still apply, so both rows arrive and read as the sentences above,
-> without the bar, the countdown or the folded summary. `MISSING: compaction and wait rows` in
-> the launcher's report is this. The
+The field survives the trip because the server's own `createNormalizedMessage` spreads what it
+is given, and 1.37.3's row mapper is where it would be lost — it builds each row from an
+explicit list of fields. So the browser half anchors on that mapper's second loop, from its
+header to the `switch`, and carries **everything upstream does inside it through untouched**:
+the tool-result lookup, the subagent map and the projection cache are the matched text, replayed
+verbatim. The patch adds two fields to the row template and one branch before the switch. A row
+that branch pushes never reaches the projection cache, so it is rebuilt on every render — which
+is what keeps a live countdown honest.
+
+That loop grew a cache and a subagent map in #1206 and will grow again, which is why the anchor
+stops at the switch rather than restating the loop. `launcher/rows-check.mjs` lifts the patched
+loop out of the shipped bundle and runs it — real compaction rows read out of a real transcript
+by the patched server module, plus the ordering rules by hand:
+
+```
+$ node launcher/rows-check.mjs <patched ide-*.js> <package dir> <transcript.jsonl>
+real transcript: 19 compact rows carried through, 6206 rows total
+all checks passed
+``` The
 metadata is spelled `compact_metadata` in the live stream and `compactMetadata` in the
 transcript, so both are read — one branch serves the live turn and the history refetch that
 replaces it, because upstream normalizes both through the same function.
@@ -830,7 +841,7 @@ stands. That is
 lands, this member follows the six.
 
 ```
-frontend: 8/9 applied -- ..., clickable paths, token chip dash
+frontend: 9/9 applied -- ..., clickable paths, token chip dash
 chat: applied ..., token counter guard, token counter fallback, ...
 sessions: applied compaction
 ```
