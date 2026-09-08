@@ -282,32 +282,10 @@ if steer:
     else:
         missing.append('send while running (%d matches)' % len(BUSY.findall(s)))
 
-# (5) A Conversations row, drawn the way a Projects session row is drawn. The
-# two lists show the same sessions, and the Projects one says far more about
-# one: a dot at the left edge, amber when it needs an answer and green when it
-# was touched in the last ten minutes; a spinner while it works, or how long
-# ago it was touched; and a three-dot menu that renames, copies the provider
-# session id and archives or deletes. The Conversations row had none of it --
-# just a chevron that says nothing the row does not, the row being a link.
-#
-# So the whole row is replaced with that one, built from the app's own pieces:
-# its button variants, its Tooltip, its spinner, its provider mark, its
-# ActionMenu and icons. The one thing added is the line a row under a project
-# does not need -- which project it belongs to -- where a session row shows its
-# message count. Nothing is invented; the state was already on the props object
-# this call site reads selectedSession and currentTime off, so one more prop
-# carries the lot, and rename and delete key on the session id alone (their
-# projectId and provider arguments are compatibility parameters upstream marks
-# unused), so a row holding only a conversation summary can drive both.
-#
-# Twelve of the names below are the minifier's, and not one is guessed: each is
-# read from a site that names itself -- the Projects row for its button
-# variants, Tooltip, spinner and menu, the copy-state ternary for the clipboard
-# icon, the api object from its own call, the clipboard helper from its
-# writeText branch, and the row's own locals from the line that declares them.
-# A name already present in the target function could be a local that shadows
-# it, so that is checked too, and nothing is applied if it is.
-
+# Several patches below are anchored on names the minifier chose, which are
+# stable only within a release. Each is read from a site that says which is
+# which rather than guessed, and a patch whose names did not resolve is
+# skipped and reported.
 
 def kit_names(pattern):
     """Names the minifier chose, from a site that says which is which.
@@ -320,233 +298,6 @@ def kit_names(pattern):
     found = {m.groups() for m in re.finditer(pattern, s)}
     return found.pop() if len(found) == 1 else None
 
-
-MENU = kit_names(r's\.jsx\((\w+),\{label:"Session options",ariaLabel:`Session '
-                 r'options for \$\{\w+\.sessionName\}`,icon:(\w+),iconOnly:!0')
-EDIT = kit_names(r'\{key:"rename",label:"Rename session",icon:(\w+),onSelect:')
-TRASH = kit_names(r'\{key:"delete",label:"Archive or delete session",'
-                  r'icon:(\w+),isDanger:!0')
-COPY = kit_names(r'\w+==="copied"\?\w+:(\w+),')
-APIO = kit_names(r'(\w+)\.providerSessionId\(')
-CLIP = kit_names(r'async function (\w+)\(\w+\)\{if\(!\w+\)return!1;let \w+=!1;'
-                 r'try\{typeof navigator<"u"&&navigator\.clipboard\?\.writeText')
-SAVE = kit_names(r's\.jsx\((\w+),\{className:"h-3 w-3 text-green-600 '
-                 r'dark:text-green-400"\}\)')
-DROP = kit_names(r's\.jsx\((\w+),\{className:"h-3 w-3 text-gray-600 '
-                 r'dark:text-gray-400"\}\)')
-# The Projects row names four more just by being itself: the classname helper
-# and button variants that give it its card, its spinner, and its Tooltip.
-CARD = kit_names(r'className:(\w+)\((\w+)\(\{variant:"ghost"\}\),"h-auto w-full '
-                 r'justify-start rounded-md border bg-card p-2 pr-11 text-left '
-                 r'font-normal transition-all duration-150"')
-SPIN = kit_names(r'className:"flex h-5 w-5 items-center justify-center rounded-md '
-                 r'text-muted-foreground",children:s\.jsx\((\w+),'
-                 r'\{className:"h-3 w-3 animate-spin"\}\)')
-TIP = kit_names(r's\.jsx\((\w+),\{content:\w+\?\w+\("tooltips\.'
-                r'attentionRequiredIndicator"')
-# And the row names its own: the mark it draws, the locals it derives, the
-# translator it was handed.
-LOGO = kit_names(r's\.jsx\((\w+),\{provider:\w+\.provider,className:"h-3\.5 w-3\.5"\}\)')
-LOCAL = kit_names(r'const (\w+)=String\((\w+)\?\.id\?\?""\)===(\w+)\.sessionId,'
-                  r'(\w+)=(\w+)\(\3\.lastActivity,(\w+)\),(\w+)=')
-XLATE = kit_names(r'onLoadMore:(\w+),onRetry:(\w+),t:(\w+)\}\)\{return')
-
-# The list's props, its own signature, and the row itself -- from the return
-# that opens it to the chevron and key that close it.
-CALL = re.compile(r'selectedSession:(\w+)\.selectedSession,currentTime:\1\.currentTime,')
-SIG = re.compile(r'hasError:(\w+),selectedSession:(\w+),currentTime:(\w+),')
-ROW = re.compile(r'return s\.jsxs\("a",\{href:`/session/\$\{(\w+)\.sessionId\}`,'
-                 r'onClick:(\w+),"data-testid":"recent-conversation-row"'
-                 r'[\s\S]*?s\.jsx\(\w+,\{className:"h-3\.5 w-3\.5 flex-shrink-0 '
-                 r'text-muted-foreground/40 transition-transform '
-                 r'group-hover:translate-x-0\.5 group-hover:text-muted-foreground"\}\)'
-                 r'\]\},\1\.sessionId\)')
-
-
-def kit_row(names):
-    """The replacement row, in the app's own vocabulary.
-
-    Everything it reads is either a name the app chose for itself or one of the
-    row's own locals; the only names it introduces are _kit-prefixed, which the
-    minifier does not emit and which the caller has checked are free.
-    """
-    return ('const _kitBusy=_kitRow?.activeSessions?.has(%(conv)s.sessionId),'
-            '_kitAsk=!!_kitRow?.attentionSessionIds?.has(%(conv)s.sessionId)'
-            '&&!%(sel)s,'
-            '_kitEdit=_kitRow?.editingSession===%(conv)s.sessionId,'
-            # The app's own rule for "recently active": within ten minutes of
-            # the clock it already ticks once a minute for exactly this.
-            '_kitNew=!!%(conv)s.lastActivity&&%(now)s.getTime()-'
-            'new Date(%(conv)s.lastActivity).getTime()<6e5,'
-            '_kitDot=_kitAsk||!_kitBusy&&_kitNew,'
-            '_kitSays=_kitAsk?%(t)s("tooltips.attentionRequiredIndicator",'
-            '{defaultValue:"Session needs attention"}):'
-            '%(t)s("tooltips.activeSessionIndicator");'
-            'return s.jsxs("div",{className:"group relative",children:['
-            # the dot, at the left edge, outside the card
-            '_kitDot&&s.jsx("div",{className:"absolute left-0 top-1/2 '
-            '-translate-x-1 -translate-y-1/2 transform",children:'
-            's.jsx(%(tip)s,{content:_kitSays,position:"right",children:'
-            's.jsx("div",{role:"status","aria-label":_kitSays,'
-            'className:"h-2 w-2 animate-pulse rounded-full "+'
-            '(_kitAsk?"bg-amber-500":"bg-green-500")})})}),'
-            # the card
-            's.jsx("a",{href:`/session/${%(conv)s.sessionId}`,onClick:%(click)s,'
-            '"data-testid":"recent-conversation-row",'
-            'className:%(cn)s(%(btn)s({variant:"ghost"}),"h-auto w-full '
-            'justify-start rounded-md border bg-card p-2 pr-11 text-left '
-            'font-normal transition-all duration-150",'
-            '%(sel)s?"border-primary/20 bg-primary/5":"border-border/30",'
-            '!%(sel)s&&_kitBusy?"border-border/60 bg-muted/20 hover:bg-muted/25"'
-            ':!%(sel)s&&_kitNew?"border-green-500/30 bg-green-50/5 '
-            'hover:bg-green-50/10 dark:bg-green-900/5 dark:hover:bg-green-900/10"'
-            ':"hover:bg-accent/50"),children:'
-            's.jsxs("div",{className:"flex w-full min-w-0 items-center gap-2",'
-            'children:[s.jsx("div",{className:%(cn)s("flex h-5 w-5 flex-shrink-0 '
-            'items-center justify-center rounded-md",'
-            '%(sel)s?"bg-primary/10":"bg-muted/50"),children:'
-            's.jsx(%(logo)s,{provider:%(conv)s.provider,className:"h-3 w-3"})}),'
-            's.jsxs("div",{className:"min-w-0 flex-1",children:['
-            's.jsxs("div",{className:"flex items-center gap-2",children:['
-            's.jsx("div",{className:"min-w-0 flex-1 truncate text-sm font-normal '
-            'text-foreground",title:%(conv)s.sessionTitle,'
-            'children:%(conv)s.sessionTitle}),'
-            # working, or when it last was
-            '_kitBusy?s.jsx("span",{className:"ml-auto flex-shrink-0 '
-            'transition-opacity duration-200 "+(_kitEdit?"opacity-0":'
-            '"group-hover:opacity-0"),children:s.jsx(%(tip)s,{content:'
-            '%(t)s("tooltips.processingSessionIndicator","Processing session"),'
-            'position:"top",children:s.jsx("span",{className:"flex h-5 w-5 '
-            'items-center justify-center rounded-md text-muted-foreground",'
-            'children:s.jsx(%(spin)s,{className:"h-3 w-3 animate-spin"})})})}):'
-            '%(age)s&&s.jsx("span",{className:"ml-auto flex-shrink-0 '
-            'text-[11px] text-muted-foreground transition-opacity duration-200 "+'
-            '(_kitEdit?"opacity-0":"group-hover:opacity-0"),children:%(age)s})]}),'
-            # the line a session row under a project does not need
-            's.jsx("div",{className:"mt-0.5 flex min-w-0 items-center",children:'
-            's.jsx("span",{className:"truncate text-[10px] leading-3 '
-            'text-muted-foreground",children:%(conv)s.projectDisplayName})})]})]})}),'
-            # and the controls, over the right edge, where the Projects row has them
-            's.jsx("div",{className:"absolute right-2 top-1/2 flex '
-            '-translate-y-1/2 transform items-center gap-1",children:_kitEdit?'
-            's.jsxs(s.Fragment,{children:['
-            's.jsx("input",{type:"text","aria-label":"Session name",autoFocus:!0,'
-            'value:_kitRow.editingSessionName,'
-            'onChange:_e=>_kitRow.onEditingSessionNameChange(_e.target.value),'
-            # Leaving the controls cancels, as clicking outside them does in the
-            # Projects list; save and cancel keep the focus (see onMouseDown).
-            'onBlur:_e=>{_e.currentTarget.parentElement?.contains(_e.relatedTarget)'
-            '||_kitRow.onCancelEditingSession()},'
-            'onKeyDown:_e=>{_e.stopPropagation(),_e.key==="Enter"?'
-            # An IME sends Enter to accept a candidate, not to save.
-            '_e.nativeEvent.isComposing||_kitRow.onSaveEditingSession('
-            '%(conv)s.projectId,%(conv)s.sessionId,_kitRow.editingSessionName,'
-            '%(conv)s.provider):_e.key==="Escape"&&'
-            '_kitRow.onCancelEditingSession()},'
-            'className:"w-32 rounded border border-border bg-background px-2 '
-            'py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"}),'
-            's.jsx("button",{type:"button",title:%(t)s("tooltips.save"),'
-            'onMouseDown:_e=>_e.preventDefault(),'
-            'onClick:()=>_kitRow.onSaveEditingSession(%(conv)s.projectId,'
-            '%(conv)s.sessionId,_kitRow.editingSessionName,%(conv)s.provider),'
-            'className:"flex h-6 w-6 items-center justify-center rounded '
-            'bg-green-50 hover:bg-green-100 dark:bg-green-900/20 '
-            'dark:hover:bg-green-900/40",children:'
-            's.jsx(%(check)s,{className:"h-3 w-3 text-green-600 '
-            'dark:text-green-400"})}),'
-            's.jsx("button",{type:"button",title:%(t)s("tooltips.cancel"),'
-            'onMouseDown:_e=>_e.preventDefault(),'
-            'onClick:()=>_kitRow.onCancelEditingSession(),'
-            'className:"flex h-6 w-6 items-center justify-center rounded '
-            'bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 '
-            'dark:hover:bg-gray-900/40",children:'
-            's.jsx(%(cross)s,{className:"h-3 w-3 text-gray-600 '
-            'dark:text-gray-400"})})]}):'
-            's.jsx(%(menu)s,{label:"Session options",'
-            'ariaLabel:`Session options for ${%(conv)s.sessionTitle}`,'
-            'icon:%(dots)s,iconOnly:!0,portal:!0,variant:"ghost",size:"icon",'
-            'triggerClassName:"h-7 w-7 text-muted-foreground opacity-70 '
-            'hover:bg-muted hover:opacity-100",'
-            'menuClassName:"w-[260px] rounded-xl p-1.5 shadow-xl",'
-            'items:[{key:"rename",label:"Rename session",icon:%(edit)s,'
-            'onSelect:()=>_kitRow.onStartEditingSession(%(conv)s.sessionId,'
-            '%(conv)s.sessionTitle)},'
-            # The one item without the Projects menu's loading and copied
-            # labels: those are component state, and this row has none to spare.
-            '{key:"copy",label:"Copy session ID",icon:%(copy)s,'
-            'onSelect:()=>%(api)s.providerSessionId(%(conv)s.sessionId)'
-            '.then(_r=>_r.json()).then(_j=>%(clip)s(_j?.data?.sessionId||""))'
-            '.catch(()=>{})},'
-            # Not offered while it runs, as the Projects menu does not offer it.
-            '...!_kitBusy?[{key:"delete",label:"Archive or delete session",'
-            'icon:%(trash)s,isDanger:!0,showDividerBefore:!0,onSelect:()=>'
-            '_kitRow.onDeleteSession(%(conv)s.projectId,%(conv)s.sessionId,'
-            '%(conv)s.sessionTitle,%(conv)s.provider)}]:[]]})})]},'
-            '%(conv)s.sessionId)') % names
-
-
-row, sig = ROW.search(s), SIG.search(s)
-end = s.find('recent.loadMore', sig.start()) if sig else -1
-scope = s[sig.start():end] if end > 0 else ''
-found = [MENU, EDIT, TRASH, COPY, APIO, CLIP, SAVE, DROP, CARD, SPIN, TIP, LOGO,
-         LOCAL, XLATE]
-# Every minified name this reads, so each can be checked for a local of the
-# same name in the function being patched -- which would shadow it.
-borrowed = ([n[0] for n in found if n]
-            + ([MENU[1]] if MENU else []) + ([CARD[1]] if CARD else []))
-# A name merely appearing in that scope proves nothing -- the row already calls
-# two of these. What would break the row is a local BOUND to the same name, so
-# look for the shape of a binding: minified locals arrive as `name=` or as the
-# parameter of `name=>`.
-shadowed = [n for n in borrowed
-            if len(n) > 1 and re.search(r'\b%s\s*(?:=[^=]|=>)' % n, scope)]
-counts = [len(CALL.findall(s)), len(SIG.findall(s)), len(ROW.findall(s))]
-if all(found) and scope and not shadowed and counts == [1, 1, 1] \
-        and not re.search(r'\b_kit\w*\b', s):
-    s = CALL.sub(r'selectedSession:\1.selectedSession,'
-                 r'currentTime:\1.currentTime,_kitRow:\1,', s, count=1)
-    s = SIG.sub(r'hasError:\1,selectedSession:\2,currentTime:\3,_kitRow,', s, count=1)
-    row = ROW.search(s)                 # the two edits above moved it
-    s = s[:row.start()] + kit_row({
-        'conv': LOCAL[2], 'sel': LOCAL[0], 'age': LOCAL[3], 'now': LOCAL[5],
-        'click': LOCAL[6], 't': XLATE[2], 'cn': CARD[0], 'btn': CARD[1],
-        'tip': TIP[0], 'spin': SPIN[0], 'logo': LOGO[0], 'menu': MENU[0],
-        'dots': MENU[1], 'edit': EDIT[0], 'copy': COPY[0], 'trash': TRASH[0],
-        'api': APIO[0], 'clip': CLIP[0], 'check': SAVE[0], 'cross': DROP[0],
-    }) + s[row.end():]
-    applied.append('conversation row')
-else:
-    missing.append('conversation row (%s matches, %d/14 names%s)'
-                   % ('/'.join(str(c) for c in counts), len([n for n in found if n]),
-                      ', %s shadowed' % ','.join(shadowed) if shadowed else ''))
-
-# (6) A rename or a delete made from that menu has to reach the list it was
-# made from. Upstream refetches the archived sessions when one is deleted and
-# the projects when one is renamed; the recent list, which until now had
-# neither action, is refetched by neither -- it would keep showing the old
-# title, or a row whose session is gone. So both paths get one more call: the
-# same page-zero fetch the sidebar's refresh button makes, read from that call
-# site so the name is the app's own. That function is declared with an empty
-# dependency list, which is what makes it safe to call from callbacks whose own
-# deps have gone stale -- a reason to reuse it rather than the searchMode-gated
-# wrapper right beside it, whose gate would be read from the wrong render.
-FETCH = kit_names(r'\w+==="conversations"\?(\w+)\(0,!1\):Promise\.resolve\(\)')
-RENAMED = re.compile(r'(\w+)\.ok\?await (\w+)\(\):\(console\.error\('
-                     r'"\[Sidebar\] Failed to rename session:"')
-DELETED = re.compile(r',await (\w+)\(\);else\{const (\w+)=await (\w+)\.text\(\);'
-                     r'console\.error\("\[Sidebar\] Failed to delete session:"')
-counts = [len(RENAMED.findall(s)), len(DELETED.findall(s))]
-if FETCH and counts == [1, 1]:
-    s = RENAMED.sub(r'\1.ok?(await \2(),%s(0,!1)):(console.error('
-                    r'"[Sidebar] Failed to rename session:"' % FETCH[0], s, count=1)
-    s = DELETED.sub(r',await \1(),%s(0,!1);else{const \2=await \3.text();'
-                    r'console.error("[Sidebar] Failed to delete session:"'
-                    % FETCH[0], s, count=1)
-    applied.append('conversation refresh')
-else:
-    missing.append('conversation refresh (%s matches%s)'
-                   % ('/'.join(str(c) for c in counts),
-                      '' if FETCH else ', fetch unnamed'))
 
 # (7) The CLI's own commands, in the composer's command menu. That menu offers
 # three things: six built-ins the SERVER implements (help, models, cost, memory,
@@ -658,13 +409,18 @@ COST_CHIP = (
     '}catch{}};'
     'window.__kitCostTimer=setInterval(_p,6e4);_p()}})})}),'
 )
-SETTINGS = re.compile(r'(s\.jsx\("div",\{className:"hidden px-2 py-1\.5 md:block",'
-                      r'children:s\.jsxs\("button",\{className:"flex w-full items-'
+# The JSX factory's name is the minifier's, and it changed between releases
+# (1.37.2 called it `s`, 1.37.3 calls it `o`), so the row that carries the chip
+# names it here rather than the patch assuming it.
+SETTINGS = re.compile(r'((\w+)\.jsx\("div",\{className:"hidden px-2 py-1\.5 md:block",'
+                      r'children:\2\.jsxs\("button",\{className:"flex w-full items-'
                       r'center gap-2 rounded-lg px-2\.5 py-1\.5 text-muted-foreground '
                       r'transition-colors hover:bg-accent/60 hover:text-foreground",'
-                      r'onClick:(\w+),)')
-if len(SETTINGS.findall(s)) == 1 and not re.search(r'\b__kitCost\w*\b', s):
-    s = SETTINGS.sub(COST_CHIP + r'\1', s, count=1)
+                      r'onClick:\w+,)')
+found = SETTINGS.search(s)
+if found and len(SETTINGS.findall(s)) == 1 and not re.search(r'\b__kitCost\w*\b', s):
+    s = SETTINGS.sub(COST_CHIP.replace('s.jsx(', '%s.jsx(' % found.group(2)) + r'\1',
+                     s, count=1)
     applied.append('cost chip')
 else:
     missing.append('cost chip (%d matches)' % len(SETTINGS.findall(s)))
@@ -914,13 +670,15 @@ hit&&(node.children=kids)};walk(tree)};
 # ReferenceError on first render, i.e. a blank page -- and `node --check` cannot
 # see it. So the anchors are counted before either substitution is made.
 if links:
-    PLUG = re.compile(r'function (\w+)\(\{children:(\w+),className:(\w+),breaks:(\w+)=!1\}\)\{')
-    ARR = re.compile(r'h\.useMemo\(\(\)=>\[(\w+)\],\[\]\),\{openFileInEditor:')
+    # 1.37.3's renderer dropped the className prop and moved its rehype plugins
+    # into a memo that swaps one array for another on the math flag, so the
+    # plugin is appended to BOTH branches rather than to a single list.
+    PLUG = re.compile(r'function (\w+)\(\{children:(\w+),breaks:(\w+)=!1\}\)\{')
+    ARR = re.compile(r'(f\.useMemo\(\(\)=>(\w+)\?\[)(\w+)(\]:)(\w+)(,\[\2\]\))')
     counts = (len(PLUG.findall(s)), len(ARR.findall(s)))
     if counts == (1, 1):
         s = PLUG.sub(lambda m: KIT_PATHS + m.group(0), s, count=1)
-        s = ARR.sub(lambda m: 'h.useMemo(()=>[%s,kitPathLinks],[]),{openFileInEditor:'
-                    % m.group(1), s, count=1)
+        s = ARR.sub(r'\1\3,kitPathLinks\4[kitPathLinks]\6', s, count=1)
         applied.append('clickable paths')
     else:
         missing.append('clickable paths (%s matches)'
@@ -938,19 +696,19 @@ if links:
 # no turn yet reads the same way, which is honest for that too -- 0 was only ever
 # right by accident there.
 if links:
-    TITLE = re.compile(r'title:`\$\{(\w+)\.toLocaleString\(\)\} tokens used`')
-    NUMBER = re.compile(r'children:(\w+)\((\w+)\)\}\),(\w+)\.jsx\("span",'
-                        r'\{className:"hidden text-muted-foreground/70 sm:inline",'
-                        r'children:"tokens"\}')
+    # 1.37.3 put both halves through i18n, so the title is a lookup rather than
+    # a template and the number is the only thing left to guard.
+    TITLE = re.compile(r'title:(\w+)\("chat:misc\.tokensUsed",\{count:(\w+)\}\)')
+    NUMBER = re.compile(r'className:"font-medium text-foreground",'
+                        r'children:(\w+)\((\w+)\)\}\)')
     counts = (len(TITLE.findall(s)), len(NUMBER.findall(s)))
     if counts == (1, 1):
-        s = TITLE.sub(lambda m: 'title:%s?`${%s.toLocaleString()} tokens used`'
+        s = TITLE.sub(lambda m: 'title:%s?%s("chat:misc.tokensUsed",{count:%s})'
                       ':"no token usage reported for this session yet"'
-                      % (m.group(1), m.group(1)), s, count=1)
-        s = NUMBER.sub(lambda m: 'children:%s?%s(%s):"\\u2014"}),%s.jsx("span",'
-                       '{className:"hidden text-muted-foreground/70 sm:inline",'
-                       'children:"tokens"}'
-                       % (m.group(2), m.group(1), m.group(2), m.group(3)), s, count=1)
+                      % (m.group(2), m.group(1), m.group(2)), s, count=1)
+        s = NUMBER.sub(lambda m: 'className:"font-medium text-foreground",'
+                       'children:%s?%s(%s):"\\u2014"})'
+                       % (m.group(2), m.group(1), m.group(2)), s, count=1)
         applied.append('token chip dash')
     else:
         missing.append('token chip dash (%s matches)'
@@ -1804,138 +1562,58 @@ RESUME = [
 # aggregate's side; the cache-field test is what that PR needs to work on a stack
 # whose per-call frames are partial.
 BUDGET = [
-    ('token counter per call',
-     '    const messageUsage = sdkMessage.message?.usage || sdkMessage.usage;\n',
-     '    const messageUsage = kitPerCallUsage(sdkMessage);\n', 1),
-    ('token counter per call reader',
-     'function extractTokenBudget(sdkMessage) {\n',
-     '/**\n'
-     ' * KIT: the per-call usage a context reading can be built from. An assistant\n'
-     ' * frame\'s own usage is already per-call. A top-level one belongs to the\n'
-     ' * terminal result and is summed over every call in the turn, so it overstates\n'
-     ' * the conversation several times over; its iterations array holds the per-call\n'
-     ' * figures it was summed from, and an SDK that does not populate it leaves\n'
-     ' * nothing here to publish.\n'
-     ' */\n'
-     'function kitPerCallUsage(sdkMessage) {\n'
-     '    const perCall = sdkMessage.message?.usage;\n'
-     '    if (perCall && typeof perCall === \'object\') {\n'
-     '        return perCall;\n'
-     '    }\n'
-     '    const aggregate = sdkMessage.usage;\n'
-     '    if (!aggregate || typeof aggregate !== \'object\'\n'
-     '        || !Array.isArray(aggregate.iterations) || !aggregate.iterations.length) {\n'
+    # One choke point now: 1.37.3 reads the per-call assistant frame itself and
+    # skips the synthetic all-zero rows, both of which this group used to do by
+    # hand. What upstream still publishes is a PARTIAL account -- a frame whose
+    # cache fields are absent, whose input_tokens is therefore only the uncached
+    # remainder (2 against a warm cache) -- so the badge reads single digits for
+    # the rest of the session. This is claudecodeui#1288, awaiting review there;
+    # when it lands, this member goes the way of the six it replaced.
+    ('token counter guard',
+     '    return buildTokenBudget(messageUsage);\n',
+     '    // KIT: a reading is one request\'s whole prompt -- the uncached input\n'
+     '    // plus BOTH cache halves. A payload reporting neither has counted only\n'
+     '    // part of its input; one reporting a single half still leaves the other\n'
+     '    // defaulting to zero. Presence is the test, not the value: a first\n'
+     '    // request against a cold cache reports both halves as zero.\n'
+     '    const kitCounted = [\n'
+     '        [\'cache_creation_input_tokens\', \'cacheCreationInputTokens\', \'cacheCreationTokens\'],\n'
+     '        [\'cache_read_input_tokens\', \'cacheReadInputTokens\', \'cacheReadTokens\'],\n'
+     '    ].every((keys) => keys.some((key) => messageUsage[key] != null\n'
+     '        && Number.isFinite(Number(messageUsage[key]))));\n'
+     '    if (!kitCounted) {\n'
      '        return null;\n'
      '    }\n'
-     '    // The newest main-thread call. A compaction or an advisor message is a\n'
-     '    // call of its own, and its usage is not the conversation\'s.\n'
-     '    let sawTyped = false;\n'
-     '    for (let index = aggregate.iterations.length - 1; index >= 0; index -= 1) {\n'
-     '        const iteration = aggregate.iterations[index];\n'
-     '        if (!iteration || typeof iteration !== \'object\'\n'
-     '            || typeof iteration.type !== \'string\') {\n'
-     '            continue;\n'
-     '        }\n'
-     '        sawTyped = true;\n'
-     '        if (iteration.type === \'message\') {\n'
-     '            return iteration;\n'
-     '        }\n'
-     '    }\n'
-     '    // Entries with no type predate the union; take them at face value.\n'
-     '    return sawTyped ? null : aggregate.iterations[aggregate.iterations.length - 1];\n'
-     '}\n'
-     'function extractTokenBudget(sdkMessage) {\n', 1),
-    ('token counter',
-     '        const outputTokens = readNumber(messageUsage.output_tokens '
-     '?? messageUsage.outputTokens);\n'
-     '        const totalUsed = inputTokens + outputTokens;\n',
-     '        const outputTokens = readNumber(messageUsage.output_tokens '
-     '?? messageUsage.outputTokens);\n'
-     '        // KIT: two payloads here are not readings of a context, and\n'
-     '        // publishing either is what made the counter jump.\n'
-     '        //\n'
-     '        // No input at all is one of the messages the CLI writes itself --\n'
-     '        // model "<synthetic>": the interrupt notice, an API error, the\n'
-     '        // usage-limit line -- whose usage is zeros throughout, so the\n'
-     '        // counter read 0 until the next real turn.\n'
-     '        if (!inputTokens) {\n'
-     '            return null;\n'
-     '        }\n'
-     '        // And a frame with no cache accounting in it has counted only part\n'
-     '        // of its input: input_tokens alone is the UNCACHED remainder, which\n'
-     '        // against a warm cache is 2 or 3, and its output is still 0. Every\n'
-     '        // one of the 18,091 usage records in the CLI\'s own transcripts has\n'
-     '        // all four fields, so their absence is the signal. No exemption for\n'
-     '        // the result: its own usage is a turn total, and what is per-call\n'
-     '        // about it has already been taken out of iterations above.\n'
-     '        const kitCounted = messageUsage.cache_creation_input_tokens !== undefined\n'
-     '            || messageUsage.cache_read_input_tokens !== undefined\n'
-     '            || messageUsage.cacheCreationInputTokens !== undefined\n'
-     '            || messageUsage.cacheReadInputTokens !== undefined\n'
-     '            || messageUsage.cacheCreationTokens !== undefined\n'
-     '            || messageUsage.cacheReadTokens !== undefined;\n'
-     '        if (!kitCounted) {\n'
-     '            return null;\n'
-     '        }\n'
-     '        const totalUsed = inputTokens + outputTokens;\n', 1),
-    # modelUsage is cumulative too -- on the captured turn it equalled the
-    # aggregate to the token -- so it must not become the answer for a result
-    # whose usage was just refused above. The branch stays for what it was for:
-    # a message carrying modelUsage and no usage at all.
-    ('token counter legacy',
-     '    if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== \'object\') {\n',
-     '    // KIT: not a second chance for a usage payload already refused.\n'
-     '    if (sdkMessage.usage || sdkMessage.message?.usage) {\n'
-     '        return null;\n'
-     '    }\n'
-     '    if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== \'object\') {\n', 1),
+     '    // And there is no context window without a prompt.\n'
+     '    const kitBudget = buildTokenBudget(messageUsage);\n'
+     '    return kitBudget.inputTokens > 0 ? kitBudget : null;\n', 1),
+    # The modelUsage fallback can still produce a zero of its own, and a zero is
+    # not a reading either.
     ('token counter fallback',
      '    const outputTokens = readNumber(modelData.cumulativeOutputTokens '
      '?? modelData.outputTokens);\n'
      '    const totalUsed = inputTokens + outputTokens;\n',
      '    const outputTokens = readNumber(modelData.cumulativeOutputTokens '
      '?? modelData.outputTokens);\n'
-     '    // KIT: as above -- nothing to publish rather than a zero.\n'
+     '    // KIT: nothing to publish rather than a zero.\n'
      '    if (!inputTokens) {\n'
      '        return null;\n'
      '    }\n'
      '    const totalUsed = inputTokens + outputTokens;\n', 1),
-    # The result message says what the model's window actually is, per model,
-    # under modelUsage -- so the gauge can stop guessing. CONTEXT_WINDOW stays
-    # the fallback for every message that does not carry one, and its 160000
-    # default stays the last resort. The largest reported window wins: a turn
-    # that also ran a subagent on a smaller model lists both, and the session's
-    # own model is the one being measured.
-    # Twice over, at two indentations: the message-usage branch and the older
-    # modelUsage fallback each compute their own.
-    ('token counter window',
-     '        const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n',
-     '        // KIT: what the CLI says this model holds, before what the\n'
-     '        // environment guesses it holds.\n'
-     '        const kitReportedWindows = Object.values(sdkMessage.modelUsage || {})\n'
-     '            .map((entry) => Number(entry && entry.contextWindow) || 0);\n'
-     '        const contextWindow = Math.max(0, ...kitReportedWindows)\n'
-     '            || parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n', 1),
-    ('token counter window fallback',
-     '    const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n',
-     '    // KIT: as above.\n'
-     '    const kitReportedWindows = Object.values(sdkMessage.modelUsage || {})\n'
-     '        .map((entry) => Number(entry && entry.contextWindow) || 0);\n'
-     '    const contextWindow = Math.max(0, ...kitReportedWindows)\n'
-     '        || parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;\n', 1),
 ]
 
 SESSION_MAP = '/**\n * Adds a session to the active sessions map\n'
 
 # (label, old, new, anchor count) -- run forward with CLOUDCLI_STEER=1 and in
 # reverse without it, so the flag alone decides, in both directions.
-MODELS_IMPORT = ("import { CLAUDE_PREDEFINED_MODELS } from "
-                 "'../../../../modules/providers/list/claude/claude-models.provider.js';\n")
+# The models import used to be the anchor here and grew a second name in
+# 1.37.3; the SDK import is the one line this file cannot be without.
+SDK_IMPORT = "import { query } from '@anthropic-ai/claude-agent-sdk';\n"
 DB_IMPORT = "import { sessionsDb } from '../../../../modules/database/index.js';\n"
 RUNTIME = [
     ('steering history',                # kitRecordSteer needs the transcript path
-     MODELS_IMPORT,
-     MODELS_IMPORT + DB_IMPORT, 1),
+     SDK_IMPORT,
+     SDK_IMPORT + DB_IMPORT, 1),
     ('steering channel',
      SESSION_MAP,
      STEER_BLOCK + SESSION_MAP, 1),
@@ -2014,9 +1692,12 @@ SERVICE = [
      '        },\n'
      '        async abort(providerName, sessionId) {\n', 1),
 ]
+# 1.37.3 wrapped the refusal in a ws check -- a scheduled send has no socket.
 REFUSE = ('    if (!run) {\n'
-          '        sendProtocolError(ws, \'RUN_IN_PROGRESS\', `Session "${sessionId}" '
-          'already has a run in progress.`, sessionId);\n')
+          '        if (ws) {\n'
+          '            sendProtocolError(ws, \'RUN_IN_PROGRESS\', `Session "${sessionId}" '
+          'already has a run in progress.`, sessionId);\n'
+          '        }\n')
 CHAT = [
     ('steering route',
      REFUSE,
@@ -2256,82 +1937,6 @@ NEW = OLD + '''        // KIT: compaction --------------------------------------
         }
 '''
 
-# --- patch 13 ---------------------------------------------------------------
-# The token counter is fed by live events and by nothing else, so a session that
-# is not mid-turn has nothing feeding it. Its chip renders unconditionally and
-# falls back to a zero state, so a reload, a session switch or a server restart
-# leaves a session holding half a million tokens reporting "0 tokens" until the
-# next turn puts the number back.
-#
-# The reading it wants is already in hand: fetchHistory has just read the whole
-# transcript, and the last usage the CLI recorded there is exactly what the live
-# counter last showed. So it goes out with the history, on the same `tokenUsage`
-# field the Codex provider already sends and the frontend store already carries
-# through -- no new route, no new state, and nothing to reconcile.
-#
-# Same rule as the live path: a record with no input tokens is not a measurement
-# of a context (the CLI's own <synthetic> messages carry zeros in every field),
-# and a subagent's record measures its own context rather than this session's.
-HIST_ANCHOR = ('async function getSessionMessages(sessionId, providerSessionId, '
-               'limit, offset) {\n')
-HIST_HELPER = '''// KIT: the counter after a reload ---------------------------------------------
-// Reads back what the live token counter last showed, out of the transcript this
-// module already parses, so the number survives a reload, a session switch and a
-// server restart instead of falling back to the chip's zero state.
-function kitHistoryTokenUsage(entries) {
-    if (!Array.isArray(entries)) {
-        return null;
-    }
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-        const entry = entries[index];
-        // A subagent's usage is its own context, not this session's.
-        if (!entry || entry.type !== 'assistant' || entry.isSidechain) {
-            continue;
-        }
-        const usage = entry.message?.usage;
-        if (!usage || typeof usage !== 'object') {
-            continue;
-        }
-        const cacheCreationTokens = Number(usage.cache_creation_input_tokens) || 0;
-        const cacheReadTokens = Number(usage.cache_read_input_tokens) || 0;
-        const inputTokens = (Number(usage.input_tokens) || 0)
-            + cacheCreationTokens + cacheReadTokens;
-        // No input at all is one of the messages the CLI wrote itself.
-        if (!inputTokens) {
-            continue;
-        }
-        const outputTokens = Number(usage.output_tokens) || 0;
-        return {
-            used: inputTokens + outputTokens,
-            total: parseInt(process.env.CONTEXT_WINDOW, 10) || 160000,
-            inputTokens,
-            outputTokens,
-            cacheReadTokens,
-            cacheCreationTokens,
-            cacheTokens: cacheCreationTokens + cacheReadTokens,
-            breakdown: { input: inputTokens, output: outputTokens },
-        };
-    }
-    return null;
-}
-'''
-HIST_RETURN = ('        return {\n'
-               '            messages: page,\n'
-               '            total,\n'
-               '            hasMore,\n'
-               '            offset: normalizedOffset,\n'
-               '            limit: normalizedLimit,\n'
-               '        };\n')
-HIST_RETURN_NEW = ('        return {\n'
-                   '            messages: page,\n'
-                   '            total,\n'
-                   '            hasMore,\n'
-                   '            offset: normalizedOffset,\n'
-                   '            limit: normalizedLimit,\n'
-                   '            // KIT: what the token counter had, so it survives the reload.\n'
-                   '            tokenUsage: kitHistoryTokenUsage(rawMessages),\n'
-                   '        };\n')
-
 applied, already, missing = [], [], []
 
 
@@ -2351,8 +1956,6 @@ def apply(label, marker, pairs):
 
 
 apply('compaction', 'KIT: compaction', [(OLD, NEW)])
-apply('history token counter', 'KIT: the counter after a reload',
-      [(HIST_ANCHOR, HIST_HELPER + HIST_ANCHOR), (HIST_RETURN, HIST_RETURN_NEW)])
 
 if applied:
     open(path, 'w').write(s)
@@ -2515,82 +2118,6 @@ PY
     mv "$FTS.prepatch" "$FTS"
   fi
 fi
-
-# --- patch 12: a plugin's skills, when it also ships commands ------------------
-# A Claude Code plugin can ship both `commands/` and `skills/`; the CLI reads
-# both. This server reads the first one it finds and skips the other:
-#
-#     if (await pathExistsAsDirectory(commandsPath)) {
-#         skills.push(...(await this.listPluginCommandSkills(...)));
-#         continue;                       // <- skills/ never looked at
-#     }
-#
-# and the commands reader takes `.md` only. So a plugin whose commands are in
-# another format loses BOTH halves: the commands branch matches nothing, and the
-# `continue` walks past the skills sitting next to it. ponytail is exactly that
-# shape -- six `commands/*.toml`, six real skills -- and contributes nothing to
-# the command menu, while `/ponytail:*` works in the terminal. A plugin shipping
-# both properly (claude-md-management) silently loses its skill the same way.
-#
-# Dropping the `continue` is the whole fix: the skills branch below already
-# skips a plugin with no `skills/`, and the menu dedupes by command, so a name
-# in both places is listed once. Nothing is hidden by this patch that upstream
-# shows -- it only stops hiding.
-SKP="$PKG/dist-server/server/modules/providers/list/claude/claude-skills.provider.js"
-if [[ -f $SKP ]]; then
-  # Same self-healing as the sections above: upstream never says KIT, so a file
-  # that does not is the original -- cache it. One that does is ours, so the
-  # original goes back before it is patched again.
-  if ! grep -q KIT "$SKP"; then
-    cp "$SKP" "$SKP.kitorig"
-  elif [[ -f $SKP.kitorig ]]; then
-    cp "$SKP.kitorig" "$SKP"
-    echo "  re-patching the skills provider from the packaged original"
-  fi
-  cp "$SKP" "$SKP.prepatch"
-  if python3 - "$SKP" <<'PY'
-import sys
-
-path = sys.argv[1]
-s = open(path).read()
-
-OLD = """                    if (await pathExistsAsDirectory(commandsPath)) {
-                        skills.push(...(await this.listPluginCommandSkills(commandsPath, pluginId, pluginName)));
-                        continue;
-                    }
-"""
-NEW = """                    // KIT: a plugin can ship commands AND skills, and one whose
-                    // commands are not .md (ponytail's are .toml) lost both here:
-                    // nothing matched, and the `continue` skipped the skills next
-                    // to them. Read both -- the check below still skips a plugin
-                    // with no skills/, and the menu dedupes by command.
-                    if (await pathExistsAsDirectory(commandsPath)) {
-                        skills.push(...(await this.listPluginCommandSkills(commandsPath, pluginId, pluginName)));
-                    }
-"""
-
-if 'KIT: a plugin can ship commands AND skills' in s:
-    print('plugin skills: already in place')
-    sys.exit(0)
-if s.count(OLD) != 1:
-    print('  MISSING: plugin skills (%d anchors) -- upstream moved it'
-          % s.count(OLD), file=sys.stderr)
-    sys.exit(1)
-open(path, 'w').write(s.replace(OLD, NEW, 1))
-print('plugin skills: applied')
-PY
-  then
-    if node --check "$SKP" >/dev/null 2>&1; then
-      rm -f "$SKP.prepatch"
-    else
-      mv "$SKP.prepatch" "$SKP"
-      echo "WARNING: the plugin-skills patch broke syntax, reverted" >&2
-    fi
-  else
-    mv "$SKP.prepatch" "$SKP"
-  fi
-fi
-
 
 # --- anchor self-check ------------------------------------------------------
 # Every patch above hangs off something upstream happens to do: a Tailwind

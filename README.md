@@ -67,7 +67,7 @@ merge *plus* a vite + tsc build with two native modules.)
 | **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
-Written against **CloudCLI 1.37.2** and **Claude Code 2.1.235**. The bundle and server patches
+Written against **CloudCLI 1.37.3** and **Claude Code 2.1.263**. The bundle and server patches
 are anchored on text upstream chose, so a later release can move an anchor: the launcher then
 reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
 untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
@@ -237,41 +237,22 @@ The launcher un-seeds what its earlier floating-pill version left behind, and `i
 reports a still-installed plugin directory rather than deleting it: that is a clone with a
 switch beside it in Settings → Plugins, and removing either is yours to do.
 
-## Eight small edits in the bundle
+## Nine small edits in the bundle
 
-Three are things the app already almost does; one is a default worth flipping; one is a
-list keeping itself current; one is a menu that never listed what the CLI can do; one puts a
-number on the page that was only ever a command away; one draws two things the app never
-mentioned at all:
+Three are things the app already almost does; one is a default worth flipping; one is a menu
+that never listed what the CLI can do; one puts a number on the page that was only ever a
+command away; one draws two things the app never mentioned at all:
+
+Two more used to live here and no longer do: the **Conversations row** and its **rename/delete
+refresh** landed upstream in 1.37.3 as
+[#1157](https://github.com/siteboon/claudecodeui/pull/1157), so the kit stopped carrying them —
+the app draws that row itself now, and patches the row in place rather than refetching.
 
 - **Conversations, not Projects, as the sidebar's default.** The switch is `useState` that is
   never persisted, so it reset to Projects on every load.
 - **The model's description in the model menu.** Every option already carries one, and the
   menu-item component already renders one when given it — the effort menu right next door
   passes exactly that prop. The model menu just never did.
-- **A Conversations row, drawn the way a Projects session row is drawn.** The two lists show
-  the same sessions, and the Projects one said far more about one: a dot at the left edge,
-  amber when it needs an answer and green when it was touched in the last ten minutes; a
-  spinner while it works, or how long ago it was touched; and a three-dot menu that renames,
-  copies the provider session id, archives or deletes. A Conversations row had none of it —
-  just a chevron that says nothing the row does not, the row being a link. So the whole row
-  is replaced by that one, built from the app's own pieces: its button variants, its
-  `Tooltip`, its spinner, its provider mark, its `ActionMenu` and icons, and the editing
-  state it already keys by session id. Added to it is the one line a row under a project does
-  not need — which project it belongs to — where a session row shows its message count.
-  Nothing had to be reimplemented: rename and delete key on the session id alone (their
-  `projectId` and `provider` arguments are compatibility parameters upstream marks unused),
-  so a row holding only a conversation summary drives both. The one thing not carried over is
-  the copy item's *loading* / *copied* labels, which are component state this row has none
-  of; it copies, and says only that it copies. Upstream is carrying
-  [the same change](https://github.com/siteboon/claudecodeui/pull/1157) as a shared component.
-- **A rename or a delete refreshing the list it was made from.** Upstream refetches the
-  archived sessions when one is deleted and the projects when one is renamed. The
-  Conversations list, which until now had neither action, was refetched by neither — it
-  would keep showing the old title, or a row whose session is gone. Both paths get one more
-  call: the same page-zero fetch the sidebar's own refresh button makes. (The PR upstream
-  patches the loaded rows in place instead, which also keeps the pages a reader has loaded
-  past the first; reaching those state setters through the minifier is not worth it here.)
 - **The CLI's own commands, in the command menu.** That menu offers three things — six
   built-ins the *server* implements, the provider's skills, and whatever sits in
   `.claude/commands` — and never the commands the **CLI** implements. `/compact` above all,
@@ -364,27 +345,24 @@ Each substitution must match its anchor **exactly once** — in a minified bundl
 way to tell the intended site from a coincidence — and the run says what it did:
 
 ```
-frontend: 11/11 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, conversation row, conversation refresh, cli commands, cost chip,
-compaction and wait rows, clickable paths, token chip dash
+frontend: 8/9 applied -- sidebar default, model description, ctrl+enter to send,
+send while running, cli commands, cost chip, clickable paths, token chip dash
+  MISSING: compaction and wait rows (0/1 matches) -- upstream moved it
 ```
 
-Eleven because three of them belong to patches described below rather than here: *send while
+Nine because three of them belong to patches described below rather than here: *send while
 running* to steering, *clickable paths* to the paths patch and its server half, and *token
 chip dash* to the token counter. `CLOUDCLI_STEER=0` leaves the first out, `CLOUDCLI_LINKS=0`
 the second, and the count comes down with them.
 
-Several are read from more than one anchor: the conversation row alone borrows twelve names
-the minifier chose — the classname helper and button variants that give a session row its
-card, the `Tooltip`, the spinner, the provider mark, the `ActionMenu` and four icons, the api
-object, the clipboard helper, and the row's own locals. Not one is guessed. Each comes from a
-site that says which is which: the Projects row names its own card, spinner and menu, the
-copy-state ternary names the clipboard icon, the api object comes from its own call, and the
-row's locals from the line that declares them. A name that appears more than once is accepted
-only when every occurrence agrees on it — the mobile and desktop halves of a row name the
-same spinner — and a name **bound** inside the function being patched would shadow what the
-new row means by it, so that is checked too, and nothing is applied if it is. A name merely
-*used* there is no obstacle: the row already calls two of the twelve.
+Eight applied, on 1.37.3, because the ninth is the one edit this release genuinely broke
+rather than moved: see [Compaction, said out loud](#compaction-said-out-loud).
+
+Several are read from more than one anchor, and no minified name is guessed: each comes from a
+site that says which is which — the row that carries the cost chip names the JSX factory, the
+markdown renderer names its own plugin array, the token chip names its formatter. A name that
+appears more than once is accepted only when every occurrence agrees on it, and a patch whose
+names did not resolve is skipped and reported rather than applied on a guess.
 
 ## The model menu
 
@@ -519,7 +497,14 @@ Compacted · auto · 725k → 18k tokens · 2m 56s        ▸ full summary
 
 `trigger` says whether you asked for it or the window did. Everything the row shows is in the
 message's `content`, so an unpatched bundle renders it as the sentence it is; the `compact`
-field beside it is only how [the browser half](#eight-small-edits-in-the-bundle) draws it. The
+field beside it is only how the browser half draws it.
+
+> **On 1.37.3 the browser half is not applied.** #1206 rebuilt the transcript pipeline around a
+> normalizer that constructs each row from an explicit field list, so the `compact` and `wait`
+> fields are dropped before the renderer sees them — a re-port rather than a re-anchor, and not
+> done yet. The server halves still apply, so both rows arrive and read as the sentences above,
+> without the bar, the countdown or the folded summary. `MISSING: compaction and wait rows` in
+> the launcher's report is this. The
 metadata is spelled `compact_metadata` in the live stream and `compactMetadata` in the
 transcript, so both are read — one branch serves the live turn and the history refetch that
 replaces it, because upstream normalizes both through the same function.
@@ -819,64 +804,50 @@ over all 21 transcripts here, the two agree on 19 and neither finds a reading in
 The one thing that reader can still get wrong is the shape above: it breaks at the last
 assistant record carrying a usage object, and a `<synthetic>` record carries one full of zeros.
 
-While reading all this: the window being measured against was `CONTEXT_WINDOW`,
-whose default is 160,000 — so a 1M-context model spent every long session measured
-against a sixth of its window. The CLI has been saying what the window is all along,
-under `modelUsage`, one entry per model with a `contextWindow` on each; the largest
-reported wins, since a turn that also ran a subagent on a smaller model lists both
-and the session's own model is the one being measured. `CONTEXT_WINDOW` stays the
-fallback for any message that reports none, and its 160,000 the last resort.
+While reading all this, the window being measured against was `CONTEXT_WINDOW`, whose default
+is 160,000 — so a 1M-context model spent every long session measured against a sixth of its
+window. The kit used to lift the real number out of `modelUsage`, where the CLI reports one
+entry per model with a `contextWindow` on each. On 1.37.3 that pickup is gone: the budget is
+built in `buildTokenBudget`, which is handed a usage payload and never sees the message the
+`modelUsage` sits on, so re-adding it would mean threading the message through a function that
+deliberately takes none. The window comes from `CONTEXT_WINDOW` again — set it per deployment
+(`Environment=CONTEXT_WINDOW=1000000` in the unit here). The cost of that is honest to state: a
+session switched to a smaller model reads against the configured number rather than its own.
 
-Verified against the same transcripts: all 54 synthetic records publish nothing while
-all 18,455 real readings from the transcripts are unchanged — those carry four
-fields and are per-call, which is why they are the reading of record; the captured
-mid-turn shape publishes nothing, and so does the captured aggregate, while an
-`iterations` array yields its newest `message` entry; 19 of 21 sessions report a
-reading from history, 64,447 to 824,336 tokens, agreeing with upstream's own reader
-on every one of them; and the chip, run out of the deployed bundle with a stub renderer, shows a dash
-for no reading and upstream's own rounding for every real one. The two sessions that
-report nothing have no real turn in them, and for those a dash is the truth.
+**What 1.37.3 does itself, and this no longer patches.** Upstream now reads the per-call
+assistant frame rather than the turn-summed `result`, skips subagent traffic and the
+`<synthetic>` all-zero rows, and hands a reading back with each page of history
+(`summarizeClaudeTokenUsage`, which skips sidechains and zero rows exactly as the kit's own
+reader did). Six of this patch's members and the whole history-counter patch went with it.
 
-```
-frontend: 11/11 applied -- ..., clickable paths, token chip dash
-chat: applied ..., token counter, token counter fallback, token counter window,
-token counter window fallback, ...
-sessions: applied compaction, history token counter
-```
-
-None of it is gated on a flag: together it removes wrong numbers and adds none. The
-browser half lands on the next reload, the server halves on the next restart.
-
-## A plugin's skills, when it also ships commands
-
-A Claude Code plugin may ship `commands/`, `skills/`, or both, and the CLI reads both. The
-server read whichever it found first:
-
-```js
-if (await pathExistsAsDirectory(commandsPath)) {
-    skills.push(...(await this.listPluginCommandSkills(...)));
-    continue;                       // <- skills/ never looked at
-}
-```
-
-and the commands reader accepts `.md` only. So a plugin whose commands are in some other format
-lost **both** halves: the commands branch matched nothing, and the `continue` walked straight
-past the skills sitting next to them. `ponytail` is exactly that shape — six `commands/*.toml`
-and six real skills — so `/ponytail:*` worked in the terminal and was absent from the command
-menu, with no error anywhere to say why. A plugin shipping both properly, like
-`claude-md-management`, lost its skill the same way, more quietly.
-
-Dropping the `continue` is the whole patch. The skills branch below it already skips a plugin
-with no `skills/`, and the menu dedupes by command, so a name present in both places is listed
-once:
+**What is left is one guard.** Upstream still publishes a *partial* account: a frame whose cache
+fields are absent, whose `input_tokens` is therefore only the uncached remainder — 2 against a
+warm cache — which is how the badge lands on single digits and stays there. The kit requires
+both cache halves to be reported (presence, not value: a cold first request reports both as
+zero) and a prompt above zero, and publishes nothing otherwise, so the last complete reading
+stands. That is
+[claudecodeui#1288](https://github.com/siteboon/claudecodeui/pull/1288), open upstream; when it
+lands, this member follows the six.
 
 ```
-plugin skills: applied
+frontend: 8/9 applied -- ..., clickable paths, token chip dash
+chat: applied ..., token counter guard, token counter fallback, ...
+sessions: applied compaction
 ```
 
-Not gated on a flag: it hides nothing upstream shows, it only stops hiding. Lands on the next
-restart.
+Neither half is gated on a flag: together they remove wrong numbers and add none. The browser
+half lands on the next reload, the server half on the next restart.
 
+## A plugin's skills, when it also ships commands — landed upstream
+
+A plugin may ship `commands/`, `skills/`, or both, and the CLI reads both. The server read
+whichever it found first, and its commands reader takes `.md` only — so a plugin whose commands
+are in another agent's format lost both halves at once, contributing nothing to the command menu
+with no error to say why (`ponytail`, six `commands/*.toml` and six real skills, was exactly
+that). Dropping one `continue` fixed it.
+
+That is in 1.37.3 as [#1274](https://github.com/siteboon/claudecodeui/pull/1274), so the kit no
+longer patches it. Kept here as the reason the launcher's report is one line shorter than it was.
 
 ## The Cost tab
 

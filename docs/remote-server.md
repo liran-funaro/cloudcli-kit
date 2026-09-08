@@ -4,7 +4,7 @@ A readable browser UI for Claude Code, with the session **executing on your remo
 box**, reached from your laptop over an SSH tunnel. Nothing is exposed to the network and no
 session content is relayed through third-party infrastructure.
 
-Verified on RHEL 9.8, Claude Code CLI 2.1.235, CloudCLI 1.37.2, with model access through a
+Verified on RHEL 9.8, Claude Code CLI 2.1.263, CloudCLI 1.37.3, with model access through a
 self-hosted LiteLLM gateway. Earlier revisions of this guide carried the launcher inline; it is
 [`launcher/cloudcli-start`](../launcher/cloudcli-start) in this repository now.
 
@@ -140,15 +140,14 @@ into the journal:
 | | |
 |---|---|
 | [appearance](../README.md#retuning-the-appearance) | your stylesheet, linked after the app's own, plus a generated accent substitution for the blue Tailwind utilities no variable reaches |
-| [eleven bundle edits](../README.md#eight-small-edits-in-the-bundle) | sidebar default, model descriptions, ⌘/Ctrl+Enter to send, send while running, conversation rows, the CLI's own slash commands, the cost chip, compaction and wait rows, clickable paths, the token chip |
+| [nine bundle edits](../README.md#nine-small-edits-in-the-bundle) | sidebar default, model descriptions, ⌘/Ctrl+Enter to send, send while running, the CLI's own slash commands, the cost chip, compaction and wait rows, clickable paths, the token chip (the compaction/wait rows are not applied on 1.37.3) |
 | [the model menu](../README.md#the-model-menu) | each option described and priced; options a deployment cannot serve dropped |
 | [a Stop that always stops](../README.md#a-stop-that-always-stops) | an interrupt that cannot wedge on a CLI that has stopped reading |
 | [steering](../README.md#steering-a-turn-in-flight) | a message typed mid-turn changes course in that same turn |
 | [compaction](../README.md#compaction-said-out-loud) | drawn where it happens, with the summary folded in |
 | [waiting](../README.md#waiting-said-out-loud) | what the session has running says so while it runs, a turn held open for it says so, and your next message goes into the same process |
 | [clickable paths](../README.md#a-path-in-the-chat-clickable) | a file path in a message opens the file, including one an agent wrote outside the project |
-| [the token counter](../README.md#the-token-counter-and-the-three-ways-it-read-wrong) | only a complete account is published, history supplies one after a reload, and the window comes from what the CLI says the model holds |
-| [a plugin's skills](../README.md#a-plugins-skills-when-it-also-ships-commands) | a plugin that ships commands and skills has both listed, instead of losing the skills to the commands folder |
+| [the token counter](../README.md#the-token-counter-and-the-three-ways-it-read-wrong) | only a complete account is published — a partial one leaves the last real reading standing (history and the per-call read are upstream's own since 1.37.3) |
 
 Each is anchored on text upstream chose, so a later CloudCLI release can move an anchor: that
 patch then reports `MISSING`, the rest still apply, and nothing is left half-edited — see [the
