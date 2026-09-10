@@ -185,9 +185,9 @@ cloudcli-slack-report -n -t "hello" -m ":wave: checking"       # prints the payl
 cloudcli-slack-report -t "hello" -m ":wave: checking"          # actually posts
 ```
 
-The trigger has to declare the variables the command sends, and the buttons have to be bound to
-them — see [Reporting to Slack](#reporting-to-slack) for the variable list and the two traps
-worth knowing before you wire it. `./install.sh --no-slack` skips the command and its skill; no
+The trigger has to declare the five variables the command sends — see
+[Reporting to Slack](#reporting-to-slack) for the list and the two traps worth knowing before you
+wire it. `./install.sh --no-slack` skips the command and its skill; no
 variable set means `--dry-run` still works and a real send exits 3 rather than failing quietly.
 
 ### Updating
@@ -967,38 +967,39 @@ how a change arrives. Enable it once in Settings → Plugins.
 
 A long run finishes after you have left the desk, and the terminal it finished in is not
 where you are. So the kit carries [`notify/cloudcli-slack-report`](notify/cloudcli-slack-report),
-installed as `~/bin/cloudcli-slack-report`: a headline, a status line, a detail block, and up to
-five buttons, posted to a **Workflow Builder webhook trigger**.
+installed as `~/bin/cloudcli-slack-report`: a headline, a status line and a short detail block,
+posted to a **Workflow Builder webhook trigger**.
 
 A command rather than a tab, for the same reason the stylesheet is not a plugin — the recipient
 is a phone, and the sender is usually something running unattended, so neither end is the
 browser the plugin API can reach.
 
-    cloudcli-slack-report -t "Tests failed" -m ":x: 2 of 47 failing" -s "$(tail -40 test.log)"
-    npm test 2>&1 | cloudcli-slack-report -t "Test run" -m ":test_tube: see detail"
+    cloudcli-slack-report -t "Tests failed" -m ":x: 2 of 47 failing" \
+      -s "Both in auth/session; token refresh 401s since the clock-skew change."
+    cloudcli-slack-report -t "Deploy finished" -m ":rocket: staging up, 4m12s"
     cloudcli-slack-report -n ...        # print the payload, send nothing
 
-`-t` and `-m` are required, everything else has a default; `--help` lists the rest. Repo, branch
-and the button URLs come from the git checkout, and the host comes from its remote — an
-Enterprise remote yields Enterprise links, so the buttons point at the server the code is
-actually on. **Outside a repository, pass `-C DIR`**: a systemd unit's working directory is not
-the repository being reported on, and without it the repo-relative buttons have nothing to
-resolve against and fall back. `SLACK_REPORT_URL` holds the trigger URL and is read from the
+`-t` and `-m` are required, everything else has a default; `--help` lists the rest. Repo and
+branch come from the git checkout, so **outside a repository, pass `-C DIR`**: a systemd unit's
+working directory is not the repository being reported on, and without it both report as `n/a`.
+Only an explicit `-s -` reads stdin, because a report with no detail block is the normal case and
+auto-reading stdin would hang any caller that left a pipe open. `SLACK_REPORT_URL` holds the trigger URL and is read from the
 environment, so a unit wants `/bin/bash -lc` for the same reason the two existing units do — the
 credential stays in one file rather than being copied into a unit.
 
 ### What the Slack side has to look like
 
-The trigger declares the variables; this command sends them. Declare `title`, `message`,
-`summary`, `repo`, `branch`, and whichever of `link_pr`, `link_checks`, `link_commit`,
-`link_detail`, `link_directive` you give buttons to. Undeclared keys are ignored, so declaring a
-subset is fine — but **every declared variable must arrive non-empty**, which is why each URL
-this command computes always resolves to a live page rather than an invented path.
+The trigger declares the variables; this command sends them. Declare five Text variables:
+`title`, `message`, `summary`, `repo`, `branch`. Undeclared keys are ignored, so declaring a
+subset is fine — but **every declared variable must arrive non-empty**, which is why the command
+falls back to `n/a` and `—` rather than sending a field blank.
 
 Two things measured rather than assumed. **Styling belongs in the workflow editor**: text passed
 through a variable keeps newlines, indentation and `:emoji:`, and loses `*bold*` — it arrives
-literal. And a button's **label is fixed in the editor** while only its URL can be a variable, so
-more buttons means more variables, not a parameterised one.
+literal. And **link buttons were tried and dropped**: they take vertical space on the phone the
+report is read on, and because a button's label is fixed in the editor while only its URL can be
+a variable, five buttons meant five more variables to keep non-empty. What the report can't say
+in its own lines, it doesn't say.
 
 ### `{"ok":true}` is not delivery
 

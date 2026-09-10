@@ -18,7 +18,6 @@ don't see until much later. That wait — not the outcome — is the trigger.
 
 - A build, test run, migration, or background job finished — **including when it failed**
 - Unattended or scheduled work produced a result worth surfacing
-- Any task with a noticeable wait, whatever the outcome
 - The user asked to be notified, pinged, or reported to on Slack
 
 Send it as the final step of slow work, not a stream of checkpoints.
@@ -28,25 +27,34 @@ Terminal output is enough there, and a notification they didn't need costs more 
 
 ## What each field carries
 
-A report has three parts with three different jobs:
+Write for a manager glancing at a phone with a few seconds to spare. The whole report
+is read standing up, between other things. Three parts, three jobs:
 
 - **`-t` headline** — a few words naming what happened: `Tests failed`, `Deploy finished`.
-- **`-m` message** — **one short line**: the result at a glance, a count and a verdict,
-  legible on a lock screen. `:emoji:` renders here.
-- **`-s` summary** — **all the context**: failing assertions, the log excerpt, what to do
-  next. Multi-line; newlines and indentation survive.
+- **`-m` message** — **one short line**: the verdict and the number, legible on a lock
+  screen. `:emoji:` renders here.
+- **`-s` summary** — **three to five short lines, one point per line**: the finding, the
+  cause if known, the next step. Newlines survive, so keep the lines separate.
 
-The message is what they read *without* opening Slack. The summary is what they read when
-they do. So the number goes in the message and the evidence goes in the summary.
+Nothing in the message links out, so these three lines are everything the reader gets —
+which is why they have to be the lines that matter and not the log. Read the log yourself
+and write what it shows. Omit `-s` when the one line already said everything.
 
-    cloudcli-slack-report -t "Tests failed" -m ":x: 2 of 47 failing" -s "$(tail -40 test.log)"
-    npm test 2>&1 | cloudcli-slack-report -t "Test run" -m ":test_tube: 47 passed"
+    cloudcli-slack-report -t "Tests failed" -m ":x: 2 of 47 failing" -s \
+    "Both failures are in auth/session, not the new code.
+    Token refresh 401s since the clock-skew change.
+    Fix looks local to refreshToken()."
+
+    cloudcli-slack-report -t "Deploy finished" -m ":rocket: staging up, 4m12s"
     cloudcli-slack-report -n ...        # dry-run: prints the payload, sends nothing
 
 `-t` and `-m` are required; `-C` names the git directory when cwd is not the repo being
 reported on. `--help` lists the rest.
 
 ## Common Mistakes
+
+**Forwarding the log instead of summarizing it.** Nobody reads the wall, and `-s`
+truncates at 2800 characters so an untrimmed `tail -40` loses its own tail as well.
 
 **Trusting exit 0 or `{"ok":true}` as proof of delivery.** That means the trigger
 accepted the payload, not that the message posted — a workflow step can still fail
@@ -55,11 +63,8 @@ afterwards. Report the send as *sent*, not as *seen*.
 **Sending markup for emphasis.** `*bold*` arrives literal. Styling lives in the Slack
 workflow editor, not the payload.
 
-**Running it outside a git repo without `-C`.** The report still sends, but repo, branch
-and every button URL fall back — so the links are useless. Systemd units and cron need `-C`.
-
-**Pasting logs in raw.** `-s` truncates at 2800 characters, so an untrimmed log loses its
-own tail. Send the part someone would act on.
+**Running it outside a git repo without `-C`.** The report still sends, but `repo` and
+`branch` fall back to placeholders. Systemd units and cron need `-C`.
 
 ## Setup
 
