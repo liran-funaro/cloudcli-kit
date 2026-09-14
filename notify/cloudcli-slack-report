@@ -5,7 +5,7 @@
 #
 #   -t, --title        one-line headline                          (required)
 #   -m, --message      short status line, :emoji: renders         (required)
-#   -s, --summary      detail block; "-" reads stdin
+#   -s, --summary      up to 5 bullets, "- " each, <=12 words; "-" reads stdin
 #   -C, --repo-dir     git directory to read repo/branch from    (default: cwd)
 #   -r, --repo         repo name                       (default: from git remote)
 #   -b, --branch       branch name                     (default: from git HEAD)
@@ -22,11 +22,20 @@
 #
 # Styling belongs in the workflow editor, not here: text passed through a
 # variable keeps newlines, indentation and :emoji: but NOT *bold*.
+#
+# The message is read on a phone in a couple of seconds, so its shape is
+# checked rather than merely documented: prose crept back every time this was
+# only written down. Adjust the three limits below if the shape should change.
 set -uo pipefail
+
+max_bullets=5
+max_bullet_words=12
+max_message_words=14
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next }
                NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 
+nl=$'\n'
 title=""; message=""; summary=""; repo=""; branch=""
 repo_dir=""; dry=0
 while [ $# -gt 0 ]; do
@@ -66,6 +75,39 @@ slug=$(printf '%s' "$remote" | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#
 [ -n "$branch" ]  || branch="n/a"
 [ -n "$summary" ] || summary="—"
 
+words() { printf '%s' "$1" | wc -w; }
+die()   { printf 'cloudcli-slack-report: %s\n' "$1" >&2; exit 2; }
+
+case "$message" in *"$nl"*)
+  die "--message must be one line; the detail goes in -s bullets" ;;
+esac
+mw=$(words "$message")
+[ "$mw" -le "$max_message_words" ] ||
+  die "--message is $mw words, max $max_message_words: give the verdict and the number, nothing else"
+
+# One fact per bullet, short enough to take in at a glance. Rejecting is
+# deliberate: a truncated report reads as a complete one, so it has to fail
+# loudly enough that the caller rewrites it.
+if [ "$summary" != "—" ]; then
+  n=0
+  while IFS= read -r line; do
+    case "${line//[[:space:]]/}" in "") continue ;; esac
+    case "$line" in "- "*) ;; *)
+      die "summary must be bullets, one per line, each starting \"- \"; got: $line" ;;
+    esac
+    bw=$(words "${line#- }")
+    [ "$bw" -le "$max_bullet_words" ] ||
+      die "bullet is $bw words, max $max_bullet_words -- split or cut it: $line"
+    n=$((n + 1))
+  done <<EOF
+$summary
+EOF
+  [ "$n" -gt 0 ] || die "summary has no bullets"
+  [ "$n" -le "$max_bullets" ] ||
+    die "$n bullets, max $max_bullets: keep the ones the reader has to know"
+fi
+
+# A single enormous word (a URL) can still pass the word counts.
 max=2800
 if [ "${#summary}" -gt "$max" ]; then
   summary="${summary:0:$max}"$'\n…truncated'

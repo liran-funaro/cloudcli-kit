@@ -975,7 +975,8 @@ is a phone, and the sender is usually something running unattended, so neither e
 browser the plugin API can reach.
 
     cloudcli-slack-report -t "Tests failed" -m ":x: 2 of 47 failing" \
-      -s "Both in auth/session; token refresh 401s since the clock-skew change."
+      -s "- both failures are in auth/session, not the new code
+    - token refresh 401s since the clock-skew change"
     cloudcli-slack-report -t "Deploy finished" -m ":rocket: staging up, 4m12s"
     cloudcli-slack-report -n ...        # print the payload, send nothing
 
@@ -1000,6 +1001,16 @@ literal. And **link buttons were tried and dropped**: they take vertical space o
 report is read on, and because a button's label is fixed in the editor while only its URL can be
 a variable, five buttons meant five more variables to keep non-empty. What the report can't say
 in its own lines, it doesn't say.
+
+### The shape is checked, not suggested
+
+`-m` is one line of at most 14 words; `-s` is at most 5 bullets, each starting `- ` and at most 12
+words. Anything else **exits 2 and names the offending line**. This started as advice in the skill
+and drifted back to walls of prose twice, so it lives in the command now — a rule an agent can
+read is a rule an agent can rationalise, and the report is read on a phone in about two seconds.
+It rejects rather than truncates: a truncated report looks exactly like a complete one.
+[`notify/test-cloudcli-slack-report`](notify/test-cloudcli-slack-report) covers the accept and
+reject cases; the three limits are constants at the top of the command.
 
 ### `{"ok":true}` is not delivery
 
