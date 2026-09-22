@@ -849,6 +849,28 @@ sessions: applied compaction
 Neither half is gated on a flag: together they remove wrong numbers and add none. The browser
 half lands on the next reload, the server half on the next restart.
 
+## Compaction — landed upstream, and this stands down for it
+
+[claudecodeui#1295](https://github.com/siteboon/claudecodeui/pull/1295) merged the
+compaction row: the provider emits it, the client folds the summary into it, and the three
+rows one compaction produces are reconciled in whichever order they arrive. That is this
+kit's patch, ported into upstream's shapes (`CompactionInfo`, i18n keys, its own row idiom).
+
+1.37.3 predates the merge, so both halves still apply here. The release that carries it
+would draw a row of its own beside the kit's, so each half now checks for upstream's marker
+first and reports itself gone instead:
+
+```
+MISSING: compaction and wait rows (upstream draws compaction now; the kit rows would double it)
+MISSING: compaction (upstream emits the row now)
+```
+
+The wait rows have no upstream equivalent and go out with them, which is the honest trade:
+upstream's activity indicator names a held session's work above the composer, so the live
+case is covered, and what is lost is the record after a reload. [#1296](https://github.com/siteboon/claudecodeui/pull/1296)
+proposed keeping that and was closed — most of it landed upstream by better means, including
+a task tracker that gets the foreground-`Agent` case right where the kit's rule did not.
+
 ## A plugin's skills, when it also ships commands — landed upstream
 
 A plugin may ship `commands/`, `skills/`, or both, and the CLI reads both. The server read

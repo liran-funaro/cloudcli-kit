@@ -649,8 +649,16 @@ def kit_row_row(m):
         % common) + m.group(0)
 
 
+# claudecodeui#1295 put the compaction row upstream, so a release carrying it
+# draws one itself and this patch would draw a second beside it. The wait rows
+# have no upstream equivalent and go with them -- the activity indicator that
+# landed alongside covers the live case, and this says plainly that the rest is
+# gone rather than leaving two rows to explain.
 counts = (len(MAP.findall(s)), len(NOTIF.findall(s)))
-if MD and counts == (1, 1) and '_kitWait' not in s:
+if 'compactSummary' in s:
+    missing.append('compaction and wait rows (upstream draws compaction now; '
+                   'the kit rows would double it)')
+elif MD and counts == (1, 1) and '_kitWait' not in s:
     s = MAP.sub(kit_row_map, s, count=1)
     s = NOTIF.sub(kit_row_row, s, count=1)
     applied.append('compaction and wait rows')
@@ -2013,7 +2021,12 @@ def apply(label, marker, pairs):
     applied.append(label)
 
 
-apply('compaction', 'KIT: compaction', [(OLD, NEW)])
+# Same release boundary as the browser half above: once the provider emits the
+# row itself, inserting ours would emit two for one compaction.
+if 'compact_boundary' in s:
+    missing.append('compaction (upstream emits the row now)')
+else:
+    apply('compaction', 'KIT: compaction', [(OLD, NEW)])
 
 if applied:
     open(path, 'w').write(s)
