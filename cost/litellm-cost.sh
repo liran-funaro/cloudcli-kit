@@ -182,13 +182,24 @@ read_token() {
 }
 
 # GET $1 into file $2. Token goes through stdin, never argv.
+# The proxy's failures are transport-shaped and brief -- it reports its own
+# upstream trouble as `Authentication Error, All connection attempts failed`,
+# which is not an authentication problem at all -- so one retry cures most of
+# them. Measured over a week here: 44 of 1840 runs carried an error notice, none
+# of them a real credential failure.
 api() {
-  local path="$1" out="$2" tok
+  local path="$1" out="$2" tok attempt
   tok="$(read_token)" || { echo "cannot read token file: $TOKEN_FILE" >"$out.err"; return 1; }
   [[ -n $tok ]] || { echo "no token: set ANTHROPIC_AUTH_TOKEN or --token-file" >"$out.err"; return 1; }
-  printf 'url = "%s"\nheader = "Authorization: Bearer %s"\nsilent\nshow-error\nmax-time = %s\n' \
-    "${BASE}${path}" "$tok" "$TIMEOUT" \
-    | curl --config - -o "$out" 2>"$out.err"
+  for attempt in 1 2; do
+    printf 'url = "%s"\nheader = "Authorization: Bearer %s"\nsilent\nshow-error\nmax-time = %s\n' \
+      "${BASE}${path}" "$tok" "$TIMEOUT" \
+      | curl --config - -o "$out" 2>"$out.err"
+    api_error "$out" >/dev/null 2>&1 || return 0
+    (( attempt == 2 )) && return 1
+    : >"$out.err"
+    sleep 2
+  done
 }
 
 api_error() {
@@ -720,6 +731,14 @@ write_json() {
 # Written whole or not at all: the tab fetches this file on a timer of its own,
 # and half a page is worse than a stale one.
 mkdir -p "$(dirname "$OUT")" 2>/dev/null
+# A run that failed has nothing better to say than the page already on disk, so
+# a recent report stays: the tab refreshes every few minutes and a notice where
+# real numbers used to be reads as a broken deployment rather than as one bad
+# request. A stale report is replaced, since by then the notice is the truth.
+if [[ -n $FAIL && -f $OUT ]] && ! find "$OUT" -mmin +30 -print -quit | grep -q .; then
+  echo "kept the last good report; this run failed: $FAIL" >&2
+  exit 1
+fi
 render >"$TMP/out.html" || { echo "error: render failed" >&2; exit 1; }
 install -m 640 "$TMP/out.html" "$OUT" || { echo "error: cannot write $OUT" >&2; exit 1; }
 [[ -z $FAIL ]] && { write_json || echo "warning: could not write the json sidecar" >&2; }

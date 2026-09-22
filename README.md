@@ -985,6 +985,14 @@ lives in a subdirectory here and the registry wants a manifest at the plugin roo
 so the UI's **Update** button has nothing to pull and re-running `install.sh` is
 how a change arrives. Enable it once in Settings → Plugins.
 
+
+**A failed run keeps the last good page.** The proxy's own upstream trouble arrives as
+`Authentication Error, All connection attempts failed`, which is not an authentication
+problem and reads like a broken deployment when it lands in the tab. Measured over a week
+here: 44 of 1840 runs carried a notice like that, none of them a real credential failure, so
+each request now gets one retry, and a run that still fails leaves a report younger than
+30 minutes where it is. Past that the notice is the truth and replaces it.
+
 ## Reporting to Slack
 
 A long run finishes after you have left the desk, and the terminal it finished in is not
