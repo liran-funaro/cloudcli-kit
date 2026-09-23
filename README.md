@@ -882,6 +882,36 @@ that). Dropping one `continue` fixed it.
 That is in 1.37.3 as [#1274](https://github.com/siteboon/claudecodeui/pull/1274), so the kit no
 longer patches it. Kept here as the reason the launcher's report is one line shorter than it was.
 
+## The model alias, pinned
+
+```bash
+CLOUDCLI_MODEL_PIN=none cloudcli-start          # send the alias through untouched
+CLOUDCLI_MODEL_PIN=claude-opus-4-8 cloudcli-start   # pin somewhere else
+```
+
+The CLI resolves a bare family alias to the **newest** model in it, and it moves that target
+without asking: 2.1.280 moved `opus` from `claude-opus-5` to `claude-opus-5-5`. Behind a
+gateway that allow-lists models per team, the next turn after a CLI auto-update fails outright:
+
+```
+API Error: 403 team not allowed to access model. This team can only access
+models=[…'aws/claude-opus-5'…]. Tried to access claude-opus-5-5
+```
+
+Measured against the proxy when it happened: `claude-opus-5` answers 200, `claude-opus-5-5`
+answers 403 — so it is the alias that moved, not the key that broke (the key had been fine
+all along, which is worth saying because the proxy reports its own failures as auth errors
+too; see the Cost tab above).
+
+So `default`, `best`, `opus` and `opus[1m]` are pinned to the newest Opus the gateway serves,
+at the one point where the model goes to the SDK — after the effort lookup, which keys on the
+catalog's own value and has to keep seeing it. A resumed session carrying the old alias is
+covered as well, since every run passes there. `[1m]` is preserved, so the pinned id keeps the
+1M context the option promised.
+
+Terminal sessions do not go through the server, so `~/.claude/settings.json` needs the same
+pin: `"model": "claude-opus-5[1m]"` rather than `"opus[1m]"`.
+
 ## The Cost tab
 
 A LiteLLM proxy bills per token, and nothing in CloudCLI knows that. So the kit

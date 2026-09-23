@@ -1828,6 +1828,48 @@ waiting = group(runtime, WAIT,
 if waiting is not None:
     runtime = waiting
 
+# --- patch 14: pin the model alias this deployment can actually serve ---------
+# The CLI resolves a bare family alias to the NEWEST model in it, and 2.1.280
+# moved `opus` from claude-opus-5 to claude-opus-5-5. Behind a gateway whose team
+# is allow-listed per model that is a hard failure on every turn:
+#
+#   403 team not allowed to access model ... Tried to access claude-opus-5-5
+#
+# Measured against the gateway: claude-opus-5 answers 200, claude-opus-5-5 answers
+# 403. So the alias is pinned to the newest one that is served, at the single
+# point where the model goes to the SDK -- after the effort lookup, which keys on
+# the catalog's own value and must keep seeing it. Resumed sessions carrying the
+# old alias are covered too, since every run passes here.
+#
+# CLOUDCLI_MODEL_PIN=none turns it off; CLOUDCLI_MODEL_PIN=<id> pins to another.
+PIN = [
+    ('model pin',
+     '    sdkOptions.model = options.model || CLAUDE_PREDEFINED_MODELS.DEFAULT;\n',
+     '    sdkOptions.model = options.model || CLAUDE_PREDEFINED_MODELS.DEFAULT;\n'
+     '    // KIT: an alias the CLI now resolves to a model this deployment is not\n'
+     '    // allow-listed for fails every turn with a 403, so it is pinned below.\n'
+     '    const KIT_MODEL_PIN = process.env.CLOUDCLI_MODEL_PIN || \'claude-opus-5\';\n'
+     '    const KIT_PINNED_ALIASES = new Set([\'default\', \'best\', \'opus\', \'opus[1m]\']);\n',
+     1),
+    ('model pin at the boundary',
+     '    applyClaudeEffort(sdkOptions, resolveClaudeEffort(sdkOptions.model, effort, '
+     'options.effortModels || CLAUDE_PREDEFINED_MODELS));\n',
+     '    applyClaudeEffort(sdkOptions, resolveClaudeEffort(sdkOptions.model, effort, '
+     'options.effortModels || CLAUDE_PREDEFINED_MODELS));\n'
+     '    if (KIT_MODEL_PIN !== \'none\' && KIT_PINNED_ALIASES.has(sdkOptions.model)) {\n'
+     '        sdkOptions.model = sdkOptions.model.endsWith(\'[1m]\')\n'
+     '            ? `${KIT_MODEL_PIN}[1m]`\n'
+     '            : KIT_MODEL_PIN;\n'
+     '    }\n',
+     1),
+]
+
+pinned = group(runtime, PIN,
+               '  model pin NOT applied -- anchors moved; a CLI that moves the alias '
+               'will 403 on a gateway that allow-lists models')
+if pinned is not None:
+    runtime = pinned
+
 # Patch 12 stands alone from all of it: guards in a helper nothing else reads.
 # Its own copy, so a moved anchor costs this patch and no other.
 budget = group(runtime, BUDGET,
