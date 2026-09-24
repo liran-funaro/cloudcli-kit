@@ -667,6 +667,36 @@ else:
                    % ('/'.join(str(c) for c in counts),
                       '' if MD else ', markdown unnamed'))
 
+# (13) Which worktree a session lives in, on its row. The projects list now
+# folds every checkout of a repository into one row (patch 15 on the server), so
+# a session's directory is no longer implied by the project it sits under -- the
+# row has to say it. The session view object keeps only four fields, so the
+# worktree is carried through it first and then drawn where the name is, in the
+# muted style the message count beside it already uses.
+#
+# Both lists render this shape, which is why the row edit expects two matches:
+# Projects and Conversations share the row since claudecodeui#1157.
+VIEW = re.compile(r'messageCount:Number\((\w+)\.messageCount\|\|0\)\}')
+ROW = re.compile(r'(\w+)\.jsx\("div",\{className:"min-w-0 flex-1 truncate text-sm '
+                 r'font-normal text-foreground",title:(\w+)\.sessionName,'
+                 r'children:\2\.sessionName\}\)')
+counts = (len(VIEW.findall(s)), len(ROW.findall(s)))
+if '_kitWorktree' in s:
+    missing.append('worktree badge (already marked)')
+elif counts == (1, 2):
+    s = VIEW.sub(lambda m: 'messageCount:Number(%s.messageCount||0),'
+                 '_kitWorktree:%s.worktree||""}' % (m.group(1), m.group(1)), s, count=1)
+    s = ROW.sub(lambda m: '%s.jsx("div",{className:"min-w-0 flex-1 truncate text-sm '
+                'font-normal text-foreground",title:%s.sessionName,children:%s.sessionName}),'
+                '%s._kitWorktree&&%s.jsx("span",{className:"flex-shrink-0 font-mono '
+                'text-[10px] text-muted-foreground/70",title:"worktree "+%s._kitWorktree,'
+                'children:%s._kitWorktree})'
+                % (m.group(1), m.group(2), m.group(2), m.group(2), m.group(1),
+                   m.group(2), m.group(2)), s, count=2)
+    applied.append('worktree badge')
+else:
+    missing.append('worktree badge (%s matches)' % '/'.join(str(c) for c in counts))
+
 # (11) A path in the chat, clickable. The markdown renderer already turns a
 # markdown LINK whose target looks like a file into one that opens that file in
 # the editor -- it checks the href, then the link text, and hands either to the
@@ -2229,6 +2259,220 @@ PY
     fi
   else
     mv "$FTS.prepatch" "$FTS"
+  fi
+fi
+
+# --- patch 15: worktrees, coalesced under the repository they belong to --------
+# A worktree is a checkout of the same repository, so a project per worktree
+# splits one piece of work across rows that cannot see each other -- six of them
+# here for one repo. The projects list folds them into the repository's own row,
+# reading every checkout's sessions as one list with the worktree named on each
+# row, and "load more" reads the same union so page two does not fall back to the
+# main checkout and repeat it.
+#
+# Discovery is git's: `rev-parse --git-common-dir` says which repository a path
+# belongs to and `worktree list --porcelain` says what else belongs to it, so a
+# tree made with a plain `git worktree add` is tracked with no project added for
+# it. A worktree whose repository is NOT a registered project keeps its own row
+# rather than disappearing.
+#
+# CLOUDCLI_WORKTREES=0 leaves the list exactly as upstream builds it.
+PWS="$PKG/dist-server/server/modules/projects/services/projects-with-sessions-fetch.service.js"
+if [[ -f $PWS ]]; then
+  if ! grep -q KIT "$PWS"; then
+    cp "$PWS" "$PWS.kitorig"
+  elif [[ -f $PWS.kitorig ]]; then
+    cp "$PWS.kitorig" "$PWS"
+    [[ ${CLOUDCLI_WORKTREES:-1} == 1 ]] && echo "  re-patching the projects list from the packaged original"
+  fi
+fi
+if [[ ${CLOUDCLI_WORKTREES:-1} == 1 && -f $PWS ]]; then
+  cp "$PWS" "$PWS.prepatch"
+  if python3 - "$PWS" <<'WTPY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+if 'KIT: worktrees coalesced' in s:
+    print('worktrees: already in place')
+    sys.exit(0)
+
+IMPORT_ANCHOR = "import { projectsDb, sessionsDb } from '../../../modules/database/index.js';\n"
+HELPERS = IMPORT_ANCHOR + """import { execFileSync } from 'node:child_process';
+// KIT: worktrees coalesced under the repo they belong to -----------------------
+// A worktree is a checkout of the SAME repository, so one project per worktree
+// splits one piece of work across six rows that cannot see each other. These
+// group them: git says which paths share a repository, and the sessions of all
+// of them are read as one list with the worktree named on each row.
+//
+// Discovery is git's, not a registry of ours, so a worktree made with a plain
+// `git worktree add` is tracked without anyone adding a project for it. Both
+// git calls fork a process, so the answer is cached for a few seconds -- the
+// sidebar asks for this list on every refresh.
+const KIT_WT_TTL_MS = 30000;
+let kitWtCache = { at: 0, byRepo: new Map(), repoOf: new Map() };
+
+function kitGit(dir, args) {
+    try {
+        return execFileSync('git', ['-C', dir, ...args],
+            { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    }
+    catch {
+        return '';
+    }
+}
+
+/** The repository a path belongs to, or null when it is not a git checkout. */
+function kitRepoRoot(dir) {
+    const common = kitGit(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    return common.endsWith('/.git') ? path.dirname(common) : null;
+}
+
+/** Every checkout git knows about for a repository, the main one included. */
+function kitWorktreePaths(repoRoot) {
+    return kitGit(repoRoot, ['worktree', 'list', '--porcelain'])
+        .split('\\n')
+        .filter((line) => line.startsWith('worktree '))
+        .map((line) => line.slice('worktree '.length).trim())
+        .filter(Boolean);
+}
+
+function kitWorktreeIndex(projectRows) {
+    if (Date.now() - kitWtCache.at < KIT_WT_TTL_MS) {
+        return kitWtCache;
+    }
+    const byRepo = new Map();
+    const repoOf = new Map();
+    for (const row of projectRows) {
+        const repoRoot = kitRepoRoot(row.project_path);
+        if (!repoRoot) {
+            continue;
+        }
+        repoOf.set(row.project_path, repoRoot);
+        if (!byRepo.has(repoRoot)) {
+            byRepo.set(repoRoot, new Set(kitWorktreePaths(repoRoot)));
+        }
+        byRepo.get(repoRoot).add(row.project_path);
+    }
+    kitWtCache = { at: Date.now(), byRepo, repoOf };
+    return kitWtCache;
+}
+
+/**
+ * What to call a worktree on a session row: the part of its directory name that
+ * the repository's own name does not account for -- `.wt-1` out of
+ * `acme-server.wt-1` -- and nothing at all for the main checkout.
+ */
+function kitWorktreeLabel(repoRoot, sessionPath) {
+    if (!sessionPath || sessionPath === repoRoot) {
+        return '';
+    }
+    const base = path.basename(sessionPath);
+    const repoBase = path.basename(repoRoot);
+    const suffix = base.startsWith(repoBase) ? base.slice(repoBase.length) : '';
+    return suffix || base;
+}
+
+/**
+ * One page of the sessions of every checkout of a repository, newest first.
+ *
+ * Each path is asked for the rows a page could need and the merge takes the
+ * page from that, which keeps the DB layer untouched at the cost of reading a
+ * few rows that are then dropped. A worktree count in the dozens is what this
+ * is for; thousands would want a union query instead.
+ */
+function kitReadRepoSessionsPage(memberPaths, repoRoot, options = {}) {
+    const pagination = normalizeSessionPagination(options);
+    const reach = pagination.offset + pagination.limit;
+    let rows = [];
+    let total = 0;
+    for (const memberPath of memberPaths) {
+        total += sessionsDb.countSessionsByProjectPath(memberPath);
+        rows = rows.concat(sessionsDb.getSessionsByProjectPathPage(memberPath, reach, 0));
+    }
+    const when = (row) => String(row.updated_at ?? row.created_at ?? '');
+    rows.sort((left, right) => when(right).localeCompare(when(left))
+        || String(right.session_id).localeCompare(String(left.session_id)));
+    const page = rows.slice(pagination.offset, pagination.offset + pagination.limit);
+    return {
+        sessions: page.map((row) => ({
+            ...mapSessionRowToSummary(row),
+            worktree: kitWorktreeLabel(repoRoot, row.project_path),
+        })),
+        total,
+        hasMore: pagination.offset + page.length < total,
+    };
+}
+"""
+assert s.count(IMPORT_ANCHOR) == 1, 'import anchor'
+s = s.replace(IMPORT_ANCHOR, HELPERS, 1)
+
+# the list: skip worktree rows, and read the union for a repo root
+OLD_LOOP = """    const projectRows = projectsDb.getProjectPaths();
+    const totalProjects = projectRows.length;
+    const projects = [];
+    let processedProjects = 0;
+    for (const row of projectRows) {
+        processedProjects += 1;"""
+NEW_LOOP = """    const projectRows = projectsDb.getProjectPaths();
+    // KIT: a worktree whose repository is a project of its own is folded into it
+    // below; on its own -- the repository not registered -- it still stands.
+    const kitIndex = kitWorktreeIndex(projectRows);
+    const kitRegistered = new Set(projectRows.map((row) => row.project_path));
+    const kitVisibleRows = projectRows.filter((row) => {
+        const repoRoot = kitIndex.repoOf.get(row.project_path);
+        return !repoRoot || repoRoot === row.project_path || !kitRegistered.has(repoRoot);
+    });
+    const totalProjects = kitVisibleRows.length;
+    const projects = [];
+    let processedProjects = 0;
+    for (const row of kitVisibleRows) {
+        processedProjects += 1;"""
+assert s.count(OLD_LOOP) == 1, 'list loop'
+s = s.replace(OLD_LOOP, NEW_LOOP, 1)
+
+OLD_READ = """        const sessionsPage = readProjectSessionsPageByPath(projectPath, {
+            limit: options.sessionsLimit,
+            offset: options.sessionsOffset,
+        });"""
+NEW_READ = """        // KIT: every checkout of this repository, as one list.
+        const kitMembers = kitIndex.byRepo.get(projectPath);
+        const sessionsPage = kitMembers && kitMembers.size > 1
+            ? kitReadRepoSessionsPage([...kitMembers], projectPath, {
+                limit: options.sessionsLimit,
+                offset: options.sessionsOffset,
+            })
+            : readProjectSessionsPageByPath(projectPath, {
+                limit: options.sessionsLimit,
+                offset: options.sessionsOffset,
+            });"""
+assert s.count(OLD_READ) == 1, 'list read'
+s = s.replace(OLD_READ, NEW_READ, 1)
+
+# load-more has to read the same union, or page two collapses to the main checkout
+OLD_PAGE = """    const sessionsPage = readProjectSessionsPageByPath(projectRow.project_path, options);"""
+NEW_PAGE = """    // KIT: the same union as the first page, or "load more" would drop the
+    // worktrees' sessions and repeat the main checkout's.
+    const kitIndex = kitWorktreeIndex(projectsDb.getProjectPaths());
+    const kitMembers = kitIndex.byRepo.get(projectRow.project_path);
+    const sessionsPage = kitMembers && kitMembers.size > 1
+        ? kitReadRepoSessionsPage([...kitMembers], projectRow.project_path, options)
+        : readProjectSessionsPageByPath(projectRow.project_path, options);"""
+assert s.count(OLD_PAGE) == 1, 'load more'
+s = s.replace(OLD_PAGE, NEW_PAGE, 1)
+
+open(path, 'w').write(s)
+print('worktrees: applied')
+WTPY
+  then
+    if node --check "$PWS" >/dev/null 2>&1; then
+      rm -f "$PWS.prepatch"
+    else
+      mv "$PWS.prepatch" "$PWS"
+      echo "WARNING: the worktree patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$PWS.prepatch" "$PWS"
   fi
 fi
 

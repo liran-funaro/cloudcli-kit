@@ -1,0 +1,109 @@
+// Checks the worktree coalescing the launcher patches into the projects service.
+//
+//   node launcher/worktree-check.mjs <patched projects-with-sessions-fetch.service.js>
+//
+// The patched file is imported with its DB and synchronizer replaced by fakes, so
+// what is under test is the code that ships rather than a copy of it.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+const target = process.argv[2];
+assert.ok(target && fs.existsSync(target), 'pass the patched service file');
+
+// --- a real repository with real worktrees, so git answers for itself --------
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-wt-'));
+const repo = path.join(root, 'demo-repo');
+const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore' });
+fs.mkdirSync(repo);
+execFileSync('git', ['init', '-q', repo], { stdio: 'ignore' });
+git(repo, 'config', 'user.email', 'check@example.invalid');
+git(repo, 'config', 'user.name', 'check');
+fs.writeFileSync(path.join(repo, 'f'), 'x');
+git(repo, 'add', 'f');
+git(repo, 'commit', '-qm', 'one');
+for (const suffix of ['.wt-1', '.storage']) {
+  git(repo, 'worktree', 'add', '-q', '-b', `b${suffix}`, `${repo}${suffix}`);
+}
+const unrelated = path.join(root, 'other-repo');
+fs.mkdirSync(unrelated);
+execFileSync('git', ['init', '-q', unrelated], { stdio: 'ignore' });
+const plain = path.join(root, 'not-a-repo');
+fs.mkdirSync(plain);
+
+// --- fakes for everything the service imports -------------------------------
+const projectRows = [
+  { project_id: 'p-main', project_path: repo, custom_project_name: 'Demo' },
+  { project_id: 'p-wt1', project_path: `${repo}.wt-1`, custom_project_name: null },
+  { project_id: 'p-storage', project_path: `${repo}.storage`, custom_project_name: null },
+  { project_id: 'p-other', project_path: unrelated, custom_project_name: null },
+  { project_id: 'p-plain', project_path: plain, custom_project_name: null },
+];
+const sessionRows = {
+  [repo]: [{ session_id: 's-main', provider: 'claude', project_path: repo, updated_at: '2026-09-24T09:00:00Z', custom_name: 'main work' }],
+  [`${repo}.wt-1`]: [{ session_id: 's-wt1', provider: 'claude', project_path: `${repo}.wt-1`, updated_at: '2026-09-24T10:00:00Z', custom_name: 'newest' }],
+  [`${repo}.storage`]: [{ session_id: 's-storage', provider: 'claude', project_path: `${repo}.storage`, updated_at: '2026-09-24T08:00:00Z', custom_name: 'older' }],
+  [unrelated]: [{ session_id: 's-other', provider: 'claude', project_path: unrelated, updated_at: '2026-09-24T07:00:00Z', custom_name: 'elsewhere' }],
+  [plain]: [],
+};
+
+// Every relative import becomes a fake: node:* stay real, so the code under
+// test keeps its own fs, path and child_process.
+const source = fs.readFileSync(target, 'utf8')
+  .replace(/^import \{ projectsDb, sessionsDb \} from '.*';$/m,
+    'const projectsDb = globalThis.__kitProjectsDb;\nconst sessionsDb = globalThis.__kitSessionsDb;')
+  .replace(/^import \{ sessionSynchronizerService \} from '.*';$/m,
+    'const sessionSynchronizerService = { synchronizeSessions: async () => {} };')
+  .replace(/^import \{ WS_OPEN_STATE, connectedClients \} from '.*';$/m,
+    'const WS_OPEN_STATE = 1;\nconst connectedClients = new Set();')
+  .replace(/^import \{ AppError \} from '.*';$/m,
+    'class AppError extends Error { constructor(message) { super(message); } }');
+assert.ok(!/^import .*\.\.\//m.test(source), 'every relative import was replaced');
+
+globalThis.__kitProjectsDb = {
+  getProjectPaths: () => projectRows,
+  getArchivedProjectPaths: () => [],
+  getProjectById: (id) => projectRows.find((row) => row.project_id === id) ?? null,
+};
+globalThis.__kitSessionsDb = {
+  getSessionsByProjectPathPage: (p, limit, offset) => (sessionRows[p] ?? []).slice(offset, offset + limit),
+  countSessionsByProjectPath: (p) => (sessionRows[p] ?? []).length,
+  getSessionsByProjectPathIncludingArchived: (p) => sessionRows[p] ?? [],
+};
+
+const moduleFile = path.join(root, 'service.mjs');
+fs.writeFileSync(moduleFile, source);
+const service = await import(moduleFile);
+
+// --- what it should do ------------------------------------------------------
+const projects = await service.getProjectsWithSessions({ skipSynchronization: true });
+const paths = projects.map((p) => p.path);
+
+assert.ok(paths.includes(repo), 'the repository is listed');
+assert.ok(!paths.includes(`${repo}.wt-1`), 'its worktree is not a row of its own');
+assert.ok(!paths.includes(`${repo}.storage`), 'nor the second worktree');
+assert.ok(paths.includes(unrelated), 'an unrelated repository is untouched');
+assert.ok(paths.includes(plain), 'a directory that is not a repository is untouched');
+
+const demo = projects.find((p) => p.path === repo);
+assert.deepEqual(demo.sessions.map((s) => s.id), ['s-wt1', 's-main', 's-storage'],
+  'every checkout, newest first');
+assert.deepEqual(demo.sessions.map((s) => s.worktree), ['.wt-1', '', '.storage'],
+  'each row says which worktree, and the main checkout says nothing');
+assert.equal(demo.sessionMeta.total, 3, 'the total counts every checkout');
+
+const other = projects.find((p) => p.path === unrelated);
+assert.equal(other.sessions.length, 1);
+assert.equal(other.sessions[0].worktree, undefined, 'a lone project gains no label');
+
+// load more must read the same union, not fall back to the main checkout
+const page = await service.getProjectSessionsPage('p-main', { limit: 2, offset: 0 });
+assert.deepEqual(page.sessions.map((s) => s.id), ['s-wt1', 's-main']);
+const page2 = await service.getProjectSessionsPage('p-main', { limit: 2, offset: 2 });
+assert.deepEqual(page2.sessions.map((s) => s.id), ['s-storage'], 'the second page continues the union');
+assert.equal(page2.sessionMeta.hasMore, false);
+
+fs.rmSync(root, { recursive: true, force: true });
+console.log('worktree coalescing: all checks passed');
