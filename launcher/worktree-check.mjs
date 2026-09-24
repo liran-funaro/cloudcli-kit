@@ -113,6 +113,17 @@ assert.deepEqual(demo.sessions.map((s) => s.worktree), ['.wt-1', '.gone', '', '.
   'each row says which worktree, and the main checkout says nothing');
 assert.equal(demo.sessionMeta.total, 4, 'the total counts every checkout, deleted ones included');
 
+// the picker's own data: a checkout, its label, and the branch it has out
+const picker = demo._kitWorktrees;
+assert.ok(picker.length >= 3, 'the picker lists every checkout');
+const mainEntry = picker.find((w) => w.label === '');
+assert.ok(mainEntry && mainEntry.path === repo, 'the main checkout is in the list, unlabelled');
+assert.equal(typeof mainEntry.branch, 'string', 'and reports the branch it has out');
+const wt1 = picker.find((w) => w.label === '.wt-1');
+assert.equal(wt1.branch, 'b.wt-1', 'a worktree reports its own branch');
+const goneEntry = picker.find((w) => w.label === '.gone');
+assert.equal(goneEntry.branch, null, 'a checkout git no longer lists reports no branch');
+
 const other = projects.find((p) => p.path === unrelated);
 assert.equal(other.sessions.length, 1);
 assert.equal(other.sessions[0].worktree, undefined, 'a lone project gains no label');

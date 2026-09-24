@@ -753,12 +753,17 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
                   '?%s.jsxs("label",{className:"mt-4 flex items-center justify-center gap-2 '
                   'text-[11px] text-muted-foreground",children:['
                   '%s.jsx("span",{children:"worktree"}),'
-                  '%s.jsx("select",{className:"h-7 max-w-[13rem] truncate rounded-lg border '
+                  '%s.jsx("select",{className:"h-7 max-w-[20rem] truncate rounded-lg border '
                   'border-border/60 bg-background px-2 text-[11px] text-foreground",'
                   'defaultValue:kitWtValue(_kitProj),'
                   'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
                   'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
-                  '{value:_w.path,children:_w.label||"main"},_w.path))})]}):null,%s'
+                  '{value:_w.path,title:_w.path,'
+                  # The branch is what tells two checkouts apart when the
+                  # directory names do not, so it rides along -- em space, then
+                  # the branch, and nothing at all where git reports none.
+                  'children:(_w.label||"main")+(_w.branch?"  "+_w.branch:"")},'
+                  '_w.path))})]}):null,%s'
                   % (m.group(1), m.group(1), m.group(1), m.group(1), m.group(0)), s, count=1)
     s = OPTS.sub(lambda m: 'return{model:%s,effort:%s,permissionMode:%s(%s,%s),'
                  'toolsSettings:%s,cwd:window.__kitWtCwd'
@@ -2386,7 +2391,7 @@ import { existsSync } from 'node:fs';
 // git calls fork a process, so the answer is cached for a few seconds -- the
 // sidebar asks for this list on every refresh.
 const KIT_WT_TTL_MS = 30000;
-let kitWtCache = { at: 0, byRepo: new Map(), repoOf: new Map() };
+let kitWtCache = { at: 0, byRepo: new Map(), repoOf: new Map(), branchOf: new Map() };
 
 function kitGit(dir, args) {
     try {
@@ -2404,13 +2409,36 @@ function kitRepoRoot(dir) {
     return common.endsWith('/.git') ? path.dirname(common) : null;
 }
 
-/** Every checkout git knows about for a repository, the main one included. */
-function kitWorktreePaths(repoRoot) {
-    return kitGit(repoRoot, ['worktree', 'list', '--porcelain'])
-        .split('\\n')
-        .filter((line) => line.startsWith('worktree '))
-        .map((line) => line.slice('worktree '.length).trim())
-        .filter(Boolean);
+/**
+ * Every checkout git knows about for a repository, the main one included, with
+ * the branch each has out.
+ *
+ * The porcelain form reports both in the one call, so the branch costs nothing
+ * beyond parsing it: `worktree <path>` opens a record and `branch refs/heads/x`
+ * or `detached` closes it.
+ */
+function kitWorktreeEntries(repoRoot) {
+    const entries = new Map();
+    let current = null;
+    for (const line of kitGit(repoRoot, ['worktree', 'list', '--porcelain']).split('\\n')) {
+        if (line.startsWith('worktree ')) {
+            current = line.slice('worktree '.length).trim();
+            if (current) {
+                entries.set(current, null);
+            }
+            continue;
+        }
+        if (!current) {
+            continue;
+        }
+        if (line.startsWith('branch refs/heads/')) {
+            entries.set(current, line.slice('branch refs/heads/'.length).trim() || null);
+        }
+        else if (line.trim() === 'detached') {
+            entries.set(current, 'detached');
+        }
+    }
+    return entries;
 }
 
 /**
@@ -2452,6 +2480,7 @@ export function kitWorktreeIndex(projectRows) {
     }
     const byRepo = new Map();
     const repoOf = new Map();
+    const branchOf = new Map();
     for (const row of projectRows) {
         const repoRoot = kitRepoRoot(row.project_path);
         if (!repoRoot) {
@@ -2459,7 +2488,11 @@ export function kitWorktreeIndex(projectRows) {
         }
         repoOf.set(row.project_path, repoRoot);
         if (!byRepo.has(repoRoot)) {
-            byRepo.set(repoRoot, new Set(kitWorktreePaths(repoRoot)));
+            const entries = kitWorktreeEntries(repoRoot);
+            byRepo.set(repoRoot, new Set(entries.keys()));
+            for (const [entryPath, branch] of entries) {
+                branchOf.set(entryPath, branch);
+            }
         }
         byRepo.get(repoRoot).add(row.project_path);
     }
@@ -2478,7 +2511,7 @@ export function kitWorktreeIndex(projectRows) {
         repoOf.set(row.project_path, repoRoot);
         byRepo.get(repoRoot).add(row.project_path);
     }
-    kitWtCache = { at: Date.now(), byRepo, repoOf };
+    kitWtCache = { at: Date.now(), byRepo, repoOf, branchOf };
     return kitWtCache;
 }
 
@@ -2586,6 +2619,9 @@ NEW_PUSH = """        projects.push({
                     .map((memberPath) => ({
                         path: memberPath,
                         label: kitWorktreeLabel(projectPath, memberPath),
+                        // null for a checkout git no longer lists -- a deleted
+                        // worktree has no branch to report.
+                        branch: kitIndex.branchOf.get(memberPath) ?? null,
                     }))
                     .sort((left, right) => left.label.localeCompare(right.label))
                 : [],

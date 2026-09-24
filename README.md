@@ -928,6 +928,21 @@ all the server needs — `projectPath` for a session comes from the transcript's
 there and comes back badged like every other worktree session. A repository with one checkout
 shows no select at all.
 
+Each option names the checkout and **the branch it has out**, which is what tells two of them
+apart when the directory names do not:
+
+```
+worktree [ main              release/2.x        ⌄ ]
+           .signing             feat/faster-signing
+           .storage          design/storage
+           .wt-2             detached
+           .storage
+```
+
+`git worktree list --porcelain` reports the branch in the same call that reports the paths, so
+this costs a few lines of parsing and no extra process; `detached` is reported as such, and a
+checkout git no longer lists — a deleted worktree — carries no branch at all.
+
 The list travels with the project row rather than being fetched, because the client cannot
 reach `/api/worktrees` without the app's own auth helper — and it includes worktrees that were
 never registered as projects, which is how `.parser`, `.metrics` and `/tmp/baseline`
