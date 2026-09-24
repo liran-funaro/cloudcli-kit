@@ -724,6 +724,15 @@ KIT_WT_HELPERS = (
     'function kitWtChoose(project,value){'
     'window.__kitWtCwd={project:(project&&project.projectId)||"",path:value};'
     'try{localStorage.setItem(kitWtKey(project),value)}catch{}}\n'
+    # Two columns in a native <select>: the option text is all there is, so the
+    # label is padded to the widest one with non-breaking spaces (a plain run of
+    # spaces collapses) and a box-drawing bar is drawn between the columns. Only
+    # lines up under a monospace face, which the select asks for.
+    'function kitWtText(project,w){'
+    'const labels=((project&&project._kitWorktrees)||[]).map(x=>x.label||"main");'
+    'const label=w.label||"main";'
+    'const pad="\\u00a0".repeat(Math.max(0,Math.max(0,...labels.map(l=>l.length))-label.length));'
+    'return label+pad+"\\u00a0\\u2502\\u00a0"+(w.branch||"")}\n'
 )
 # The empty state's own signature, the pane's render of it, the line that follows
 # the model card, and the options a send is built from.
@@ -753,16 +762,17 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
                   '?%s.jsxs("label",{className:"mt-4 flex items-center justify-center gap-2 '
                   'text-[11px] text-muted-foreground",children:['
                   '%s.jsx("span",{children:"worktree"}),'
-                  '%s.jsx("select",{className:"h-7 max-w-[20rem] truncate rounded-lg border '
-                  'border-border/60 bg-background px-2 text-[11px] text-foreground",'
+                  '%s.jsx("select",{className:"h-8 max-w-[32rem] truncate rounded-lg border '
+                  'border-border/60 bg-background px-2 font-mono text-[12px] text-foreground",'
                   'defaultValue:kitWtValue(_kitProj),'
                   'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
                   'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
                   '{value:_w.path,title:_w.path,'
                   # The branch is what tells two checkouts apart when the
-                  # directory names do not, so it rides along -- em space, then
-                  # the branch, and nothing at all where git reports none.
-                  'children:(_w.label||"main")+(_w.branch?"  "+_w.branch:"")},'
+                  # directory names do not, so it rides along in a second column
+                  # -- empty where git reports none, the bar drawn regardless so
+                  # the column reads as one.
+                  'children:kitWtText(_kitProj,_w)},'
                   '_w.path))})]}):null,%s'
                   % (m.group(1), m.group(1), m.group(1), m.group(1), m.group(0)), s, count=1)
     s = OPTS.sub(lambda m: 'return{model:%s,effort:%s,permissionMode:%s(%s,%s),'

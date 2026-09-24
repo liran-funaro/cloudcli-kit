@@ -932,16 +932,21 @@ Each option names the checkout and **the branch it has out**, which is what tell
 apart when the directory names do not:
 
 ```
-worktree [ main              release/2.x           ⌄ ]
-           .signing          feat/faster-signing
-           .storage          design/storage
-           .wt-2             detached
-           .archive
+worktree [ main      │ release/2.x           ⌄ ]
+           .signing  │ feat/faster-signing
+           .storage  │ design/storage
+           .wt-2     │ detached
+           .archive  │
 ```
 
 `git worktree list --porcelain` reports the branch in the same call that reports the paths, so
 this costs a few lines of parsing and no extra process; `detached` is reported as such, and a
 checkout git no longer lists — a deleted worktree — carries no branch at all.
+
+A native `<select>` has nothing but option text to lay out with, so the label is padded to the
+widest one with non-breaking spaces — a plain run of spaces collapses — and a bar is drawn
+between the columns, which only lines up because the select asks for a monospace face. The bar is
+drawn on a branchless row too, so the column reads as one.
 
 The list travels with the project row rather than being fetched, because the client cannot
 reach `/api/worktrees` without the app's own auth helper — and it includes worktrees that were

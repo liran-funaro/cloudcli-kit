@@ -153,4 +153,24 @@ out = run([
 ]);
 assert.deepEqual(out, [{ fellThrough: 'text', content: 'hello' }]);
 
+// 8. the worktree picker's two columns, lifted from the same bundle: every option
+//    must put its bar at the same offset, whatever the labels are.
+const wtStart = src.indexOf('function kitWtText(project,w){');
+assert.ok(wtStart > 0, 'kitWtText not found in the bundle');
+const wtEnd = src.indexOf('\n', wtStart);
+const kitWtText = new Function('return ' + src.slice(wtStart, wtEnd > 0 ? wtEnd : undefined)
+  + ';kitWtText')();
+const project = { _kitWorktrees: [
+  { label: '', branch: 'release/2.x' },              // the main checkout
+  { label: '.signing', branch: 'feat/faster-signing' },
+  { label: '.storage', branch: null },               // git reports no branch
+  { label: '.a', branch: 'detached' },               // the shortest label
+] };
+const lines = project._kitWorktrees.map((w) => kitWtText(project, w));
+const bars = lines.map((l) => l.indexOf('\u2502'));
+assert.equal(new Set(bars).size, 1, 'bars must line up: ' + JSON.stringify(lines));
+assert.ok(bars[0] >= '.signing'.length, 'labels must pad to the widest one');
+assert.ok(lines[2].endsWith('\u00a0'), 'a branchless row still draws its bar');
+assert.ok(!lines.some((l) => / {2}/.test(l)), 'padding must be non-breaking, not spaces');
+
 console.log('all checks passed');
