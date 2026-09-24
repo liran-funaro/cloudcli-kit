@@ -917,6 +917,19 @@ so it applies **only to paths that no longer exist**: nothing live is ever recla
 path on another machine — `/Users/…/acme-server` — is left alone rather than merged into
 the local repository's row.
 
+**Which checkout a new session runs in** is then a question the row can no longer answer, so
+the composer asks it: a small select beside the token chip, listing the checkouts the server
+sent with the row, remembered per project. Choosing one sets `cwd` on the next send, which is
+all the server needs — `projectPath` for a session comes from the transcript's own `cwd`
+(`claude-session-synchronizer.provider.ts`), so a session started in `.wt-2` records itself
+there and comes back badged like every other worktree session. A repository with one checkout
+shows no select at all.
+
+The list travels with the project row rather than being fetched, because the client cannot
+reach `/api/worktrees` without the app's own auth helper — and it includes worktrees that were
+never registered as projects, which is how `.parser`, `.metrics` and `/tmp/baseline`
+appear here without anyone adding them.
+
 `launcher/worktree-check.mjs` runs the patched service against a real temporary repository with
 real worktrees, one of them removed properly mid-test, plus a lookalike directory and a
 foreign-root path that must both stay separate.

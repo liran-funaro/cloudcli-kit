@@ -697,6 +697,66 @@ elif counts == (1, 2):
 else:
     missing.append('worktree badge (%s matches)' % '/'.join(str(c) for c in counts))
 
+# (14) Which checkout a NEW session runs in. With every worktree folded into one
+# row (patch 15), the row no longer says where a new session would run, so the
+# composer asks: a small select beside the token chip, listing the checkouts the
+# server sent with the row. Choosing one sets `cwd` on the next send, which is
+# all the server needs -- the session records itself under the transcript's own
+# cwd, so it comes back badged like every other worktree session.
+#
+# No React state: the value is the app's own prop, the choice lives in
+# localStorage per project, and the send reads it off a global the render set.
+# A repository with one checkout shows nothing at all.
+KIT_WT_HELPERS = (
+    'function kitWtKey(project){return "kit.worktree."+((project&&project.projectId)||"")}\n'
+    'function kitWtValue(project){'
+    'const paths=((project&&project._kitWorktrees)||[]).map(w=>w.path);'
+    'let stored=null;try{stored=localStorage.getItem(kitWtKey(project))}catch{}'
+    'const chosen=stored&&paths.indexOf(stored)>=0?stored'
+    ':((project&&(project.fullPath||project.path))||"");'
+    'window.__kitWtCwd={project:(project&&project.projectId)||"",path:chosen};'
+    'return chosen}\n'
+    'function kitWtChoose(project,value){'
+    'window.__kitWtCwd={project:(project&&project.projectId)||"",path:value};'
+    'try{localStorage.setItem(kitWtKey(project),value)}catch{}}\n'
+)
+# Two components open with that prop; the footer is the one that also takes the
+# token budget, so the helpers go before it rather than before its sibling.
+FOOT = re.compile(r'function (\w+)\(\{pendingPermissionRequests:[^)]{0,400}?tokenBudget:')
+SIG = re.compile(r'tokenBudget:(\w+),onShowTokenUsage:(\w+),')
+CALL = 'onShowTokenUsage:TR,'
+CHIP = re.compile(r'(\w+)\.jsx\((\w+),\{usage:(\w+),onClick:(\w+)\}\),')
+OPTS = re.compile(r'return\{model:(\w+),effort:(\w+),permissionMode:(\w+)\((\w+),(\w+)\),'
+                  r'toolsSettings:(\w+),')
+counts = [len(FOOT.findall(s)), len(SIG.findall(s)), s.count(CALL),
+          len(CHIP.findall(s)), len(OPTS.findall(s))]
+if 'kitWtChoose' in s:
+    missing.append('worktree picker (already marked)')
+elif counts == [1, 2, 1, 1, 1]:
+    s = FOOT.sub(lambda m: KIT_WT_HELPERS + m.group(0), s, count=1)
+    # the prop, on the signature and at the one call site that renders the footer
+    s = SIG.sub(lambda m: 'tokenBudget:%s,_kitProject:_kitProj,onShowTokenUsage:%s,'
+                % (m.group(1), m.group(2)), s, count=1)
+    s = s.replace(CALL, '_kitProject:t,' + CALL, 1)
+    s = CHIP.sub(lambda m: '(_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
+                 '?%s.jsx("select",{className:"h-8 max-w-[8rem] truncate rounded-lg border '
+                 'border-border/70 bg-background/70 px-1.5 text-xs text-muted-foreground",'
+                 'title:"Which checkout a new session runs in",'
+                 'defaultValue:kitWtValue(_kitProj),'
+                 'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
+                 'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
+                 '{value:_w.path,children:_w.label||"main"},_w.path))}):null),%s'
+                 % (m.group(1), m.group(1), m.group(0)), s, count=1)
+    s = OPTS.sub(lambda m: 'return{model:%s,effort:%s,permissionMode:%s(%s,%s),'
+                 'toolsSettings:%s,cwd:window.__kitWtCwd'
+                 '&&window.__kitWtCwd.project===((e&&e.projectId)||"")'
+                 '?window.__kitWtCwd.path:void 0,'
+                 % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6)),
+                 s, count=1)
+    applied.append('worktree picker')
+else:
+    missing.append('worktree picker (%s matches)' % '/'.join(str(c) for c in counts))
+
 # (11) A path in the chat, clickable. The markdown renderer already turns a
 # markdown LINK whose target looks like a file into one that opens that file in
 # the editor -- it checks the href, then the link text, and hands either to the
@@ -2497,6 +2557,27 @@ NEW_READ = """        // KIT: every checkout of this repository, as one list.
             });"""
 assert s.count(OLD_READ) == 1, 'list read'
 s = s.replace(OLD_READ, NEW_READ, 1)
+
+# The picker in the composer needs to know the checkouts, and the client can
+# neither ask git nor reach the worktrees API without the app's own auth helper,
+# so the list travels with the row that needs it.
+OLD_PUSH = """        projects.push({
+            projectId,
+            path: projectPath,"""
+NEW_PUSH = """        projects.push({
+            // KIT: every checkout of this repository, main first by empty label.
+            _kitWorktrees: kitMembers && kitMembers.size > 1
+                ? [...kitMembers]
+                    .map((memberPath) => ({
+                        path: memberPath,
+                        label: kitWorktreeLabel(projectPath, memberPath),
+                    }))
+                    .sort((left, right) => left.label.localeCompare(right.label))
+                : [],
+            projectId,
+            path: projectPath,"""
+assert s.count(OLD_PUSH) == 1, 'project push'
+s = s.replace(OLD_PUSH, NEW_PUSH, 1)
 
 # load-more has to read the same union, or page two collapses to the main checkout
 OLD_PAGE = """    const sessionsPage = readProjectSessionsPageByPath(projectRow.project_path, options);"""
