@@ -1058,10 +1058,24 @@ the key's whole cycle rather than this session alone, which is the honest readin
 weekend cost" and the only figure that exists — a per-session number would have to come from
 somewhere the proxy does not publish.
 
+**A turn nobody is watching still has to be allowed to run.** A nudge reaches the runtime the way a
+typed message does, and the runtime approves a tool call without asking in exactly two cases: the
+permission mode says so, or the call matches the tool allow-list. Everything else opens a prompt in
+the browser and, after 55 seconds with no answer, is denied with *Permission request timed out* —
+which is what an away user's session looks like by construction. So both halves travel with the
+nudge. The **mode** is read at arming time from the session row, because it lives in the browser and
+nowhere else (`localStorage`, keyed by the session id); a session sitting in Auto Mode goes on
+running in Auto Mode, where the classifier decides per call and no human is needed. The
+**allow-list** is a user preference, so the loop reads it fresh from the database on every nudge —
+an entry added while the user is away applies to the next turn. Arming from the CLI cannot see the
+browser's mode, so `cloudcli-autonomous` without `--permission` leaves the turns on `default`, which
+asks; that is what `--permission auto` is for.
+
 **What it does not do.** It does not resume a turn mid-tool-call: the nudge is a new turn and the
-model reads its own transcript. It does not widen permissions — an armed session runs with the mode
-it already had, and `--permission` is the deliberate way to change that, never a side effect of
-clicking the chip. It does not start the server; `Restart=always` on the unit does that, which the
+model reads its own transcript. It does not widen permissions — it copies what the session already
+had, and `--permission` is the deliberate way to change that, never a side effect of clicking the
+chip. A session that asks for every tool goes on asking into an empty room and stops at the 55-second
+denial, which is the correct outcome for a setting the user chose. It does not start the server; `Restart=always` on the unit does that, which the
 kit's template now sets. And if the machine is off, none of this helps.
 
 The state is one file, `~/.cloudcli/kit-autonomy.json`, read on every pass — so arming and
@@ -1073,8 +1087,8 @@ mounted behind `authenticateToken`.
 `launcher/autonomy-check.mjs` drives the patched loop over real state files and transcripts: an
 idle armed session is nudged exactly once, a running one is left alone, each sentinel disarms, the
 ceiling fires, a vanished session disarms, the minimum gap holds off a second nudge and then lets
-the next through, a session's own nudge text wins, and a corrupt state file is a no-op rather than
-a crash.
+the next through, a session's own nudge text wins, the turn carries the mode it was armed with and the
+allow-list from preferences, and a corrupt state file is a no-op rather than a crash.
 
 ## The model alias, pinned
 

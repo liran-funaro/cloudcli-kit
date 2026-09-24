@@ -15,9 +15,13 @@
 #   --cost <usd>      stop when the key's cycle spend has risen this much since
 #                     arming, read from the Cost report's json sidecar. Cycle
 #                     spend is every key, not this session alone.
-#   --permission <m>  permission mode for the nudged turns (default: the
-#                     session's own). `bypassPermissions` is what keeps an
-#                     unattended session from stalling on an approval prompt.
+#   --permission <m>  permission mode for the nudged turns. Arming from the
+#                     session row copies the mode the session is already in; the
+#                     CLI cannot see it (it lives in the browser), so with no
+#                     --permission the turns run as `default` -- which asks, and
+#                     an approval prompt nobody answers is denied after 55s.
+#                     `auto` or `bypassPermissions` is what keeps an unattended
+#                     session from stalling on one.
 #   --nudge <text>    replace the whole nudge with your own words.
 #   --user <id>       whose session it is (default 1).
 set -uo pipefail
@@ -92,6 +96,6 @@ write_state "$(read_state | jq \
 
 printf 'armed %s\n' "$ID"
 printf '  until      %s\n' "${UNTIL_ISO:-(unstated)}"
-printf '  permission %s\n' "${PERM:-(as the session has it)}"
+printf '  permission %s\n' "${PERM:-default -- gated tools will ask, and nobody is there}"
 [[ -n $COST ]] && printf '  stops at   $%s more than the $%s spent so far\n' "$COST" "${SPEND:-?}"
 echo "  the loop picks this up within a minute; watch with --list"

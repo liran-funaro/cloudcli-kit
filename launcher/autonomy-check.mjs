@@ -51,6 +51,7 @@ fs.writeFileSync(dbStub, `
 export const scheduledMessagesDb = {};
 export const sessionDraftsDb = { listQueuedMessages: () => [] };
 export const sessionsDb = { getSessionById: (id) => globalThis.__kitSessions[id] ?? null };
+export const userPreferencesDb = { getPreferences: () => globalThis.__kitPrefs };
 `);
 const wsStub = path.join(root, 'ws.mjs');
 fs.writeFileSync(wsStub, `
@@ -60,6 +61,9 @@ export async function runDetachedChatTurn(input) {
   return { started: true };
 }
 `);
+globalThis.__kitPrefs = {
+    claudePermissions: { allowedTools: ['Bash(ssh build-host:*)'], disallowedTools: [], skipPermissions: false },
+};
 globalThis.__kitSessions = sessions;
 globalThis.__kitProcessing = processing;
 globalThis.__kitSent = sent;
@@ -87,7 +91,7 @@ const read = () => JSON.parse(fs.readFileSync(state, 'utf8'));
 //    the sentinels disarm rather than nudge; a spent-out session stops.
 processing.add('s-busy');
 write({
-    's-work': armed({ until: '2026-09-29T07:00:00Z' }),
+    's-work': armed({ until: '2026-09-29T07:00:00Z', options: { permissionMode: 'auto' } }),
     's-busy': armed(),
     's-done': armed(),
     's-stuck': armed(),
@@ -117,6 +121,15 @@ for (const needed of ['Autonomous mode', 'will not answer questions', 'reporting
 assert.match(nudge, /not for turns|must not be reported/i,
     'the nudge must rule out per-turn Slack reports');
 assert.ok(nudge.includes('2026'), 'the nudge must name the time the user is back');
+
+// 2b. the options the turn runs with. A nudge with no permission mode runs as
+//     'default' with an empty allow-list, which denies every gated tool call
+//     after 55s of waiting for a user who is away -- so both halves travel:
+//     the mode stored at arming, the allow-list read fresh from preferences.
+assert.equal(sent[0].options.permissionMode, 'auto',
+    'the turn must run in the mode the session was armed with');
+assert.deepEqual(sent[0].options.toolsSettings, globalThis.__kitPrefs.claudePermissions,
+    'and with the allow-list the composer would have sent');
 
 // 3. the minimum gap: a second pass straight afterwards must not nudge again.
 sent.length = 0;
