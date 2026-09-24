@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# cloudcli-autonomous — arm a session to keep working while you are away.
+#
+# The server's autonomy loop (launcher patch 18) reads this file on every pass,
+# so arming and disarming take effect within a minute and need no restart.
+#
+#   cloudcli-autonomous <session-id> --until 'monday 09:00' [--cost 50]
+#   cloudcli-autonomous --list
+#   cloudcli-autonomous --stop <session-id>
+#
+#   --until <when>    anything `date -d` understands; told to the agent as the
+#                     time you are back. The loop does not stop there -- it runs
+#                     until the agent says KIT-DONE or KIT-BLOCKED, or a guard
+#                     fires -- so this is pacing information, not a deadline.
+#   --cost <usd>      stop when the key's cycle spend has risen this much since
+#                     arming, read from the Cost report's json sidecar. Cycle
+#                     spend is every key, not this session alone.
+#   --permission <m>  permission mode for the nudged turns (default: the
+#                     session's own). `bypassPermissions` is what keeps an
+#                     unattended session from stalling on an approval prompt.
+#   --nudge <text>    replace the whole nudge with your own words.
+#   --user <id>       whose session it is (default 1).
+set -uo pipefail
+
+STATE="${CLOUDCLI_AUTONOMY_FILE:-$HOME/.cloudcli/kit-autonomy.json}"
+COST_JSON="${CLOUDCLI_COST_JSON:-${CLOUDCLI_PREFIX:-$HOME/.npm-global}/lib/node_modules/@cloudcli-ai/cloudcli/dist/cost.json}"
+
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+command -v jq >/dev/null || die "jq is required"
+
+read_state() { [[ -f $STATE ]] && cat "$STATE" || echo '{}'; }
+write_state() {                                   # write_state <json>
+  mkdir -p "$(dirname "$STATE")"
+  printf '%s\n' "$1" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE" && chmod 600 "$STATE"
+}
+
+case "${1:-}" in
+  --list|-l)
+    read_state | jq -r 'to_entries
+      | if length == 0 then "nothing armed" else
+          .[] | "\(.key)  \(.value.state // "?")  since \(.value.since // "?")"
+                + "  until \(.value.until // "-")  nudges \(.value.nudges // 0)"
+                + (if .value.why then "  (\(.value.why))" else "" end)
+        end'
+    exit 0 ;;
+  --stop|-s)
+    id="${2:?--stop needs a session id}"
+    state="$(read_state)"
+    jq -e --arg id "$id" 'has($id)' <<<"$state" >/dev/null || die "not armed: $id"
+    write_state "$(jq --arg id "$id" --arg now "$(date -uIseconds)" \
+      '.[$id].state = "stopped" | .[$id].ended = $now | .[$id].why = "stopped by hand"' \
+      <<<"$state")"
+    echo "disarmed $id"; exit 0 ;;
+  ''|-h|--help)
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+ID="$1"; shift
+[[ $ID == *-*-*-*-* ]] || die "that does not look like a session id: $ID"
+UNTIL='' COST='' PERM='' NUDGE='' USER_ID=1
+while (( $# )); do
+  case "$1" in
+    --until)      UNTIL="${2:?--until needs a time}"; shift 2 ;;
+    --cost)       COST="${2:?--cost needs a number}"; shift 2 ;;
+    --permission) PERM="${2:?--permission needs a mode}"; shift 2 ;;
+    --nudge)      NUDGE="${2:?--nudge needs text}"; shift 2 ;;
+    --user)       USER_ID="${2:?--user needs an id}"; shift 2 ;;
+    *)            die "unknown argument: $1" ;;
+  esac
+done
+
+UNTIL_ISO=''
+if [[ -n $UNTIL ]]; then
+  UNTIL_ISO="$(date -u -d "$UNTIL" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+    || die "cannot read that time: $UNTIL"
+fi
+# The ceiling is measured against the spend at arming, so it has to be recorded
+# now; no sidecar means no ceiling rather than a wrong one.
+SPEND="$(jq -r '(.cycle.spend // empty)' "$COST_JSON" 2>/dev/null || true)"
+[[ -n $COST && -z $SPEND ]] && echo "warning: no cost sidecar at $COST_JSON -- the ceiling will not fire" >&2
+
+write_state "$(read_state | jq \
+  --arg id "$ID" --arg now "$(date -uIseconds)" --arg until "$UNTIL_ISO" \
+  --arg perm "$PERM" --arg nudge "$NUDGE" --arg spend "${SPEND:-}" \
+  --argjson user "$USER_ID" --arg cost "${COST:-}" '
+  .[$id] = ({ state: "running", since: $now, nudges: 0, userId: $user }
+    + (if $until != "" then { until: $until } else {} end)
+    + (if $nudge != "" then { nudge: $nudge } else {} end)
+    + (if $perm  != "" then { options: { permissionMode: $perm } } else {} end)
+    + (if $cost  != "" then { costLimit: ($cost | tonumber) } else {} end)
+    + (if $spend != "" then { spendAtArm: ($spend | tonumber) } else {} end))')"
+
+printf 'armed %s\n' "$ID"
+printf '  until      %s\n' "${UNTIL_ISO:-(unstated)}"
+printf '  permission %s\n' "${PERM:-(as the session has it)}"
+[[ -n $COST ]] && printf '  stops at   $%s more than the $%s spent so far\n' "$COST" "${SPEND:-?}"
+echo "  the loop picks this up within a minute; watch with --list"

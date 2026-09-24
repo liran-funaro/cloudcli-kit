@@ -1007,6 +1007,61 @@ carried-in history first, an ordinary transcript that must not be re-read, a dot
 recovered with its dot intact, a directory matching nothing that must keep the first `cwd`, and a
 transcript with no `cwd` at all, which is not a session.
 
+## Autonomous sessions, which survive the server
+
+```bash
+cloudcli-autonomous <session-id> --until 'monday 09:00' [--cost 50]
+cloudcli-autonomous --list
+cloudcli-autonomous --stop <session-id>
+CLOUDCLI_AUTONOMY=0 cloudcli-start          # no loop, no route, no chip
+```
+
+Claude's own CLI picks a session back up where it left off. CloudCLI does not: a run lives in
+memory, so a crash, an upgrade or one of this launcher's own restarts ends the work and nothing
+says so. A session left to run over a weekend can be idle by Friday evening, and you find out on
+Monday.
+
+**Autonomous mode is per session.** Click the clock on a session's row (or use the script), say
+when you are back, and from then on the loop keeps that session moving: every pass, an armed
+session that is not already running gets a turn asking it to continue. Recovering a killed run is
+the same act from the other direction — the transcript is the state, so nothing has to be
+remembered about what the dead process was doing.
+
+The turn tells the agent what it is working under: the user is away until the stated time and will
+not answer, decide the things you would have asked and say which way you decided, check the disk
+before redoing anything that writes (your last tool call may have been cut off mid-flight), and
+end with **`KIT-DONE`** when the work is finished or **`KIT-BLOCKED`** when it genuinely cannot go
+on. Either sentinel disarms the session, as does a session that no longer exists.
+
+**Slack is for information, not for turns.** The nudge says so in as many words — a milestone, a
+decision made on the user's behalf, something broken, the work finished — and explicitly rules out
+reporting that it was nudged, started, or is still working. The kit itself posts only when a
+session's state changes: done, blocked, over budget, gone.
+
+**Two guards, because nothing else bounds an unattended loop.** Never more than one nudge a minute
+per session, and a spend ceiling read from the Cost report's own json sidecar. The ceiling measures
+the key's whole cycle rather than this session alone, which is the honest reading of "what has this
+weekend cost" and the only figure that exists — a per-session number would have to come from
+somewhere the proxy does not publish.
+
+**What it does not do.** It does not resume a turn mid-tool-call: the nudge is a new turn and the
+model reads its own transcript. It does not widen permissions — an armed session runs with the mode
+it already had, and `--permission` is the deliberate way to change that, never a side effect of
+clicking the chip. It does not start the server; `Restart=always` on the unit does that, which the
+kit's template now sets. And if the machine is off, none of this helps.
+
+The state is one file, `~/.cloudcli/kit-autonomy.json`, read on every pass — so arming and
+disarming take effect within a minute and need no restart. The loop rides on the scheduled-message
+dispatcher, which already owns a poll timer and already had to solve "fire what came due while the
+server was down"; the chip's read/write route borrows that module's router, which is already
+mounted behind `authenticateToken`.
+
+`launcher/autonomy-check.mjs` drives the patched loop over real state files and transcripts: an
+idle armed session is nudged exactly once, a running one is left alone, each sentinel disarms, the
+ceiling fires, a vanished session disarms, the minimum gap holds off a second nudge and then lets
+the next through, a session's own nudge text wins, and a corrupt state file is a no-op rather than
+a crash.
+
 ## The model alias, pinned
 
 ```bash

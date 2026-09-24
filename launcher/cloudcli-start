@@ -676,6 +676,44 @@ else:
 #
 # Both lists render this shape, which is why the row edit expects two matches:
 # Projects and Conversations share the row since claudecodeui#1157.
+KIT_AUT_HELPERS = (
+    # The armed set, polled the way the cost chip polls its report. The API needs
+    # the app's own token, which lives in localStorage under "auth-token".
+    'function kitAutTok(){try{return localStorage.getItem("auth-token")||""}catch{return ""}}\n'
+    'function kitAutDraw(_n){const _e=window.__kitAut&&window.__kitAut[_n.getAttribute("data-kit-aut")];'
+    '_n.textContent=_e?"\u23f1":"";'
+    '_n.title=_e?("autonomous"+(_e.until?" until "+new Date(_e.until).toLocaleString():"")'
+    '+" \u00b7 "+(_e.nudges||0)+" turns \u00b7 click to stop")'
+    ':"click to keep this session working while you are away"}\n'
+    'function kitAutPoll(){if(window.__kitAutTimer)return;'
+    'const _p=async()=>{try{'
+    'const _r=await fetch("/api/scheduled-messages/kit-autonomy",'
+    '{headers:{Authorization:"Bearer "+kitAutTok()},cache:"no-store"});'
+    'if(!_r.ok)return;const _j=await _r.json();'
+    'window.__kitAut=(_j&&_j.data)||{};'
+    'for(const _n of document.querySelectorAll("[data-kit-aut]"))kitAutDraw(_n)'
+    '}catch{}};'
+    'window.__kitAutTimer=setInterval(_p,3e4);_p()}\n'
+    # Arming asks only when the user is back. The permission mode is deliberately
+    # NOT set here: a session runs autonomously with whatever it already had, and
+    # widening that is a decision for `cloudcli-autonomous --permission`, made on
+    # purpose, not a side effect of clicking a clock.
+    'async function kitAutToggle(_ev,sessionId){'
+    '_ev.preventDefault();_ev.stopPropagation();'
+    'const armed=!!(window.__kitAut&&window.__kitAut[sessionId]);'
+    'let until=null;'
+    'if(!armed){until=window.prompt("Keep working while you are away. When are you back?",'
+    '"tomorrow 09:00");if(until===null)return}'
+    'try{await fetch("/api/scheduled-messages/kit-autonomy",{method:"POST",'
+    'headers:{"Content-Type":"application/json",Authorization:"Bearer "+kitAutTok()},'
+    'body:JSON.stringify({sessionId,armed:!armed,until})});'
+    'window.__kitAut=window.__kitAut||{};'
+    'if(armed){delete window.__kitAut[sessionId]}'
+    'else{window.__kitAut[sessionId]={until,nudges:0}}'
+    'for(const _n of document.querySelectorAll("[data-kit-aut]"))kitAutDraw(_n)'
+    '}catch{}}\n'
+)
+
 VIEW = re.compile(r'messageCount:Number\((\w+)\.messageCount\|\|0\)\}')
 ROW = re.compile(r'(\w+)\.jsx\("div",\{className:"min-w-0 flex-1 truncate text-sm '
                  r'font-normal text-foreground",title:(\w+)\.sessionName,'
@@ -690,10 +728,20 @@ elif counts == (1, 2):
                 'font-normal text-foreground",title:%s.sessionName,children:%s.sessionName}),'
                 '%s._kitWorktree&&%s.jsx("span",{className:"flex-shrink-0 font-mono '
                 'text-[10px] text-muted-foreground/70",title:"worktree "+%s._kitWorktree,'
-                'children:%s._kitWorktree})'
+                'children:%s._kitWorktree}),'
+                # And the autonomy chip: a clock when the session is armed,
+                # nothing when it is not, clickable either way. Addressed by
+                # session id so the poll can redraw every copy of it without
+                # React knowing this exists.
+                '%s.jsx("span",{className:"flex-shrink-0 cursor-pointer text-[11px] '
+                'text-muted-foreground/80","data-kit-aut":%s.id,'
+                'onClick:_ev=>kitAutToggle(_ev,%s.id),'
+                'ref:_e=>{if(!_e)return;kitAutPoll();kitAutDraw(_e)}})'
                 % (m.group(1), m.group(2), m.group(2), m.group(2), m.group(1),
-                   m.group(2), m.group(2)), s, count=2)
+                   m.group(2), m.group(2), m.group(1), m.group(2), m.group(2)),
+                s, count=2)
     applied.append('worktree badge')
+    applied.append('autonomy chip')
 else:
     missing.append('worktree badge (%s matches)' % '/'.join(str(c) for c in counts))
 
@@ -764,7 +812,7 @@ counts = [len(EMPTY_SIG.findall(s)), len(EMPTY_USE.findall(s)), len(READY.findal
 if 'kitWtChoose' in s:
     missing.append('worktree picker (already marked)')
 elif PANE_PROJECT and counts == [1, 1, 1, 1]:
-    s = EMPTY_SIG.sub(lambda m: KIT_WT_HELPERS + 'function %s({_kitProject:_kitProj,'
+    s = EMPTY_SIG.sub(lambda m: KIT_AUT_HELPERS + KIT_WT_HELPERS + 'function %s({_kitProject:_kitProj,'
                       'selectedSession:%s,currentSessionId:%s,provider:%s,setProvider:%s,'
                       'textareaRef:%s,' % (m.group(1), m.group(2), m.group(3), m.group(4),
                                            m.group(5), m.group(6)), s, count=1)
@@ -2873,6 +2921,441 @@ SYNCPY
     fi
   else
     mv "$SYNC.prepatch" "$SYNC"
+  fi
+fi
+
+# --- patch 18: a session that is meant to keep working ------------------------
+# Claude's own CLI picks a session back up where it left off. CloudCLI does not:
+# a run lives in memory, so when the server stops -- a crash, an upgrade, a
+# restart like the ones this launcher does -- the work stops with it and nothing
+# says so. A session left to run over a weekend can be idle by Friday evening.
+#
+# Autonomous mode is a per-session answer to that. A session is armed (by the
+# chip in its header, or by `cloudcli-autonomous`), and from then on this loop
+# keeps it moving: every pass, an armed session that is not already running gets
+# a turn asking it to continue -- which is also how a killed run is recovered,
+# since the transcript is the state and nothing else has to be remembered. The
+# agent is told the user is away until a stated time, that questions will not be
+# answered, to report through the reporting-to-slack skill, and to end with
+# KIT-DONE when the work is finished or KIT-BLOCKED when it genuinely cannot go
+# on. Either sentinel disarms the session.
+#
+# Guards, because nothing else bounds an unattended loop: never more than one
+# nudge a minute per session, and a spend ceiling read from the Cost report's own
+# json sidecar (which measures the key's whole cycle, not this session alone --
+# the honest reading of "how much has this weekend cost"). CLOUDCLI_AUTONOMY=0
+# turns the loop off; the file it reads is ~/.cloudcli/kit-autonomy.json.
+AUT="$PKG/dist-server/server/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js"
+if [[ -f $AUT ]]; then
+  if ! grep -q KIT "$AUT"; then
+    cp "$AUT" "$AUT.kitorig"
+  elif [[ -f $AUT.kitorig ]]; then
+    cp "$AUT.kitorig" "$AUT"
+    [[ ${CLOUDCLI_AUTONOMY:-1} == 1 ]] && echo "  re-patching the scheduled-message dispatcher from the packaged original"
+  fi
+fi
+if [[ ${CLOUDCLI_AUTONOMY:-1} == 1 && -f $AUT ]]; then
+  cp "$AUT" "$AUT.prepatch"
+  if python3 - "$AUT" <<'AUTPY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+if 'KIT: autonomous sessions' in s:
+    print('autonomy: already in place')
+    sys.exit(0)
+
+OLD_IMPORT = ("import { scheduledMessagesDb, sessionDraftsDb } "
+              "from '../../../modules/database/index.js';\n")
+NEW_IMPORT = ("import { scheduledMessagesDb, sessionDraftsDb, sessionsDb } "
+              "from '../../../modules/database/index.js';\n"
+              "import kitFs from 'node:fs';\n"
+              "import kitOs from 'node:os';\n"
+              "import kitPath from 'node:path';\n"
+              "import { spawn as kitSpawn } from 'node:child_process';\n")
+assert s.count(OLD_IMPORT) == 1, 'database import'
+s = s.replace(OLD_IMPORT, NEW_IMPORT, 1)
+
+HELPERS = '''
+// KIT: autonomous sessions -- the state is one file, read on every pass so that
+// arming or disarming a session takes effect without a restart.
+const KIT_AUT_FILE = process.env.CLOUDCLI_AUTONOMY_FILE
+    ?? kitPath.join(kitOs.homedir(), '.cloudcli', 'kit-autonomy.json');
+const KIT_AUT_COST = process.env.CLOUDCLI_COST_JSON
+    ?? kitPath.resolve(kitPath.dirname(new URL(import.meta.url).pathname),
+        '../../../../../dist/cost.json');
+const KIT_AUT_POLL_MS = Number(process.env.CLOUDCLI_AUTONOMY_POLL_MS ?? 60_000);
+const KIT_AUT_GAP_MS = Number(process.env.CLOUDCLI_AUTONOMY_GAP_MS ?? 60_000);
+const KIT_AUT_DONE = 'KIT-DONE';
+const KIT_AUT_BLOCKED = 'KIT-BLOCKED';
+let kitAutTimer = null;
+let kitAutInFlight = false;
+
+function kitAutRead() {
+    try {
+        const parsed = JSON.parse(kitFs.readFileSync(KIT_AUT_FILE, 'utf8'));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function kitAutWrite(store) {
+    // Whole or not at all: the CLI reads this file too.
+    try {
+        kitFs.mkdirSync(kitPath.dirname(KIT_AUT_FILE), { recursive: true });
+        const tmp = `${KIT_AUT_FILE}.tmp`;
+        kitFs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\\n`, { mode: 0o600 });
+        kitFs.renameSync(tmp, KIT_AUT_FILE);
+    }
+    catch (error) {
+        console.error('[Autonomy] could not write the state file',
+            { error: error instanceof Error ? error.message : String(error) });
+    }
+}
+/** The key's cycle spend from the Cost report's sidecar, or null if there is none. */
+function kitAutSpend() {
+    try {
+        const report = JSON.parse(kitFs.readFileSync(KIT_AUT_COST, 'utf8'));
+        const spend = Number(report?.cycle?.spend);
+        return Number.isFinite(spend) ? spend : null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * The last thing the agent said, which is where a sentinel would be.
+ *
+ * Only the tail is read: a long transcript is megabytes and the answer is always
+ * in the last few lines.
+ */
+function kitAutLastSaid(jsonlPath) {
+    try {
+        const size = kitFs.statSync(jsonlPath).size;
+        const from = Math.max(0, size - 64 * 1024);
+        const fd = kitFs.openSync(jsonlPath, 'r');
+        const buffer = Buffer.alloc(size - from);
+        kitFs.readSync(fd, buffer, 0, buffer.length, from);
+        kitFs.closeSync(fd);
+        const lines = buffer.toString('utf8').split('\\n');
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+            const line = lines[index]?.trim();
+            if (!line || !line.startsWith('{')) {
+                continue;
+            }
+            let entry;
+            try {
+                entry = JSON.parse(line);
+            }
+            catch {
+                continue;
+            }
+            if (entry?.message?.role !== 'assistant') {
+                continue;
+            }
+            const content = entry.message.content;
+            const text = typeof content === 'string'
+                ? content
+                : (Array.isArray(content)
+                    ? content.filter((part) => part?.type === 'text')
+                        .map((part) => part.text ?? '').join('\\n')
+                    : '');
+            if (text.trim()) {
+                return text;
+            }
+        }
+    }
+    catch {
+        // No transcript yet, or an unreadable one: nothing said, so nudge.
+    }
+    return '';
+}
+function kitAutWhen(iso) {
+    if (!iso) {
+        return 'an unstated time';
+    }
+    const when = new Date(iso);
+    return Number.isNaN(when.getTime()) ? String(iso) : when.toString();
+}
+function kitAutNudge(entry) {
+    if (entry.nudge) {
+        return entry.nudge;
+    }
+    const overdue = entry.until && Date.now() > new Date(entry.until).getTime();
+    return [
+        `Autonomous mode. The user is away until ${kitAutWhen(entry.until)}`
+            + `${overdue ? ' -- which has passed, so they may be back at any moment' : ''}`
+            + ' and will not answer questions.',
+        'Continue the work. Decide the things you would have asked about, say which way'
+            + ' you decided and why, and keep going. Do not stop to ask, and do not wait.',
+        'Your previous turn may have been cut off mid-tool-call by a restart, so check the'
+            + ' state on disk before redoing anything that writes.',
+        'The user follows this through Slack while away, so use the reporting-to-slack'
+            + ' skill for information they would want: a milestone reached, a decision you'
+            + ' made for them, something broken, the work finished. Not for turns -- being'
+            + ' nudged, starting, or still working is not news and must not be reported.',
+        `When the work is genuinely finished, send a Slack report and end your reply with`
+            + ` ${KIT_AUT_DONE} on its own line. If you truly cannot continue without the`
+            + ` user, say why, send a Slack report, and end with ${KIT_AUT_BLOCKED} on its`
+            + ' own line. Either one ends autonomous mode, so do not write them otherwise.',
+    ].join('\\n\\n');
+}
+function kitAutSlack(message, summary) {
+    try {
+        const child = kitSpawn('cloudcli-slack-report',
+            ['-t', 'autonomous mode', '-m', message, ...(summary ? ['-s', summary] : [])],
+            { stdio: 'ignore', detached: true });
+        child.on('error', () => {});
+        child.unref();
+    }
+    catch {
+        // A report that cannot be sent is not a reason to keep nudging.
+    }
+}
+function kitAutDisarm(store, sessionId, state, why) {
+    const entry = store[sessionId];
+    if (!entry) {
+        return;
+    }
+    entry.state = state;
+    entry.ended = new Date().toISOString();
+    entry.why = why;
+    console.log('[Autonomy] disarmed', { sessionId, state, why });
+    kitAutSlack(`session ${state}: ${why}`.slice(0, 120),
+        `- nudges sent: ${entry.nudges ?? 0}`);
+}
+/** One pass over the armed sessions. Exported so the kit's check can drive it. */
+export async function kitAutonomyPass(runtime) {
+    const store = kitAutRead();
+    const armed = Object.keys(store).filter((id) => store[id]?.state === 'running');
+    if (armed.length === 0) {
+        return 0;
+    }
+    const spend = kitAutSpend();
+    let nudged = 0;
+    let changed = false;
+    for (const sessionId of armed) {
+        const entry = store[sessionId];
+        const session = sessionsDb.getSessionById(sessionId);
+        if (!session) {
+            kitAutDisarm(store, sessionId, 'gone', 'the session no longer exists');
+            changed = true;
+            continue;
+        }
+        // Already working: that is the point, so leave it alone.
+        if (chatRunRegistry.isProcessing(sessionId)) {
+            continue;
+        }
+        const last = entry.last ? new Date(entry.last).getTime() : 0;
+        if (Number.isFinite(last) && Date.now() - last < KIT_AUT_GAP_MS) {
+            continue;
+        }
+        const said = kitAutLastSaid(session.jsonl_path ?? '');
+        if (said.includes(KIT_AUT_DONE)) {
+            kitAutDisarm(store, sessionId, 'done', 'the agent reported the work finished');
+            changed = true;
+            continue;
+        }
+        if (said.includes(KIT_AUT_BLOCKED)) {
+            kitAutDisarm(store, sessionId, 'blocked', 'the agent reported it cannot continue');
+            changed = true;
+            continue;
+        }
+        const limit = Number(entry.costLimit);
+        const base = Number(entry.spendAtArm);
+        if (Number.isFinite(limit) && limit > 0 && spend !== null && Number.isFinite(base)
+            && spend - base >= limit) {
+            kitAutDisarm(store, sessionId, 'over budget',
+                `spend since arming reached $${(spend - base).toFixed(2)}`);
+            changed = true;
+            continue;
+        }
+        const result = await runDetachedChatTurn({
+            sessionId,
+            userId: Number(entry.userId) || 1,
+            content: kitAutNudge(entry),
+            options: entry.options && typeof entry.options === 'object' ? entry.options : {},
+        }, { runtime });
+        if (result.started) {
+            entry.nudges = (Number(entry.nudges) || 0) + 1;
+            entry.last = new Date().toISOString();
+            nudged += 1;
+            changed = true;
+            console.log('[Autonomy] nudged', { sessionId, nudges: entry.nudges });
+        }
+        else if (result.error && !result.error.includes('already in progress')) {
+            kitAutDisarm(store, sessionId, 'failed', result.error);
+            changed = true;
+        }
+    }
+    if (changed) {
+        kitAutWrite(store);
+    }
+    return nudged;
+}
+function kitAutStart(runtime) {
+    if (kitAutTimer) {
+        return;
+    }
+    const pass = () => {
+        if (kitAutInFlight) {
+            return;
+        }
+        kitAutInFlight = true;
+        void kitAutonomyPass(runtime)
+            .catch((error) => console.error('[Autonomy] pass failed',
+                { error: error instanceof Error ? error.message : String(error) }))
+            .finally(() => { kitAutInFlight = false; });
+    };
+    kitAutTimer = setInterval(pass, KIT_AUT_POLL_MS);
+    kitAutTimer.unref?.();
+    // Not immediately: the provider runtimes are still coming up, and a nudge
+    // that lands before them is a failed turn in the transcript.
+    const first = setTimeout(pass, Number(process.env.CLOUDCLI_AUTONOMY_FIRST_MS ?? 45_000));
+    first.unref?.();
+}
+'''
+ANCHOR = "export function initializeScheduledMessageDispatcher(runtime) {"
+assert s.count(ANCHOR) == 1, 'dispatcher init'
+s = s.replace(ANCHOR, HELPERS + ANCHOR, 1)
+
+OLD_TAIL = """    // Catch up on anything that came due while the server was not running.
+    poll();
+}"""
+NEW_TAIL = """    // Catch up on anything that came due while the server was not running.
+    poll();
+    // KIT: and pick the armed sessions back up, which is the same problem.
+    kitAutStart(runtime);
+}"""
+assert s.count(OLD_TAIL) == 1, 'dispatcher tail'
+s = s.replace(OLD_TAIL, NEW_TAIL, 1)
+
+open(path, 'w').write(s)
+print('autonomy: applied')
+AUTPY
+  then
+    if node --check "$AUT" >/dev/null 2>&1; then
+      rm -f "$AUT.prepatch"
+    else
+      mv "$AUT.prepatch" "$AUT"
+      echo "WARNING: the autonomy patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$AUT.prepatch" "$AUT"
+  fi
+fi
+
+# --- patch 19: arming a session from its own row ------------------------------
+# The loop above reads a file, so the browser needs one route to read and write
+# it. It hangs off /api/scheduled-messages, which is already mounted behind
+# authenticateToken -- an odd address for it, but the alternative is a new mount
+# in index.js, and this patch would rather borrow a router than edit the server's
+# entry point.
+ROUTES="$PKG/dist-server/server/modules/scheduled-messages/scheduled-messages.routes.js"
+if [[ -f $ROUTES ]]; then
+  if ! grep -q KIT "$ROUTES"; then
+    cp "$ROUTES" "$ROUTES.kitorig"
+  elif [[ -f $ROUTES.kitorig ]]; then
+    cp "$ROUTES.kitorig" "$ROUTES"
+    [[ ${CLOUDCLI_AUTONOMY:-1} == 1 ]] && echo "  re-patching the scheduled-message routes from the packaged original"
+  fi
+fi
+if [[ ${CLOUDCLI_AUTONOMY:-1} == 1 && -f $ROUTES ]]; then
+  cp "$ROUTES" "$ROUTES.prepatch"
+  if python3 - "$ROUTES" <<'ROUTEPY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+if 'KIT: autonomous mode' in s:
+    print('autonomy route: already in place')
+    sys.exit(0)
+
+IMPORT = "const router = express.Router();\n"
+ROUTE = '''// KIT: autonomous mode -- the state the loop reads, over HTTP so the session row
+// can arm and disarm it. The file is the contract; this only edits it.
+import kitFs from 'node:fs';
+import kitOs from 'node:os';
+import kitPath from 'node:path';
+const KIT_AUT_FILE = process.env.CLOUDCLI_AUTONOMY_FILE
+    ?? kitPath.join(kitOs.homedir(), '.cloudcli', 'kit-autonomy.json');
+function kitAutLoad() {
+    try {
+        const parsed = JSON.parse(kitFs.readFileSync(KIT_AUT_FILE, 'utf8'));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function kitAutSave(store) {
+    kitFs.mkdirSync(kitPath.dirname(KIT_AUT_FILE), { recursive: true });
+    const tmp = `${KIT_AUT_FILE}.tmp`;
+    kitFs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\\n`, { mode: 0o600 });
+    kitFs.renameSync(tmp, KIT_AUT_FILE);
+}
+const router = express.Router();
+router.get('/kit-autonomy', asyncHandler(async (req, res) => {
+    const store = kitAutLoad();
+    // Only what the chip draws: which sessions are armed, and since when.
+    res.json(createApiSuccessResponse(Object.fromEntries(Object.entries(store)
+        .filter(([, entry]) => entry?.state === 'running')
+        .map(([sessionId, entry]) => [sessionId, {
+                until: entry.until ?? null,
+                since: entry.since ?? null,
+                nudges: Number(entry.nudges) || 0,
+            }]))));
+}));
+router.post('/kit-autonomy', asyncHandler(async (req, res) => {
+    const body = (req.body ?? {});
+    const sessionId = readString(body.sessionId, 'sessionId');
+    const userId = readUserId(req);
+    const store = kitAutLoad();
+    if (body.armed === false) {
+        if (store[sessionId]) {
+            store[sessionId].state = 'stopped';
+            store[sessionId].ended = new Date().toISOString();
+            store[sessionId].why = 'disarmed from the session row';
+            kitAutSave(store);
+        }
+        res.json(createApiSuccessResponse({ sessionId, armed: false }));
+        return;
+    }
+    // A time the browser could not parse is no time at all: the nudge says so
+    // rather than inventing one.
+    const until = typeof body.until === 'string' && !Number.isNaN(new Date(body.until).getTime())
+        ? new Date(body.until).toISOString()
+        : null;
+    store[sessionId] = {
+        ...(store[sessionId] ?? {}),
+        state: 'running',
+        since: new Date().toISOString(),
+        nudges: 0,
+        userId,
+        ...(until ? { until } : {}),
+        ...(typeof body.permissionMode === 'string' && body.permissionMode
+            ? { options: { permissionMode: body.permissionMode } }
+            : {}),
+    };
+    kitAutSave(store);
+    res.json(createApiSuccessResponse({ sessionId, armed: true, until }));
+}));
+'''
+assert s.count(IMPORT) == 1, 'router anchor'
+s = s.replace(IMPORT, ROUTE, 1)
+open(path, 'w').write(s)
+print('autonomy route: applied')
+ROUTEPY
+  then
+    if node --check "$ROUTES" >/dev/null 2>&1; then
+      rm -f "$ROUTES.prepatch"
+    else
+      mv "$ROUTES.prepatch" "$ROUTES"
+      echo "WARNING: the autonomy route patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$ROUTES.prepatch" "$ROUTES"
   fi
 fi
 

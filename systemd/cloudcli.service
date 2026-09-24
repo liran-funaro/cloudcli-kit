@@ -24,7 +24,10 @@ Environment=PORT=3001
 # Environment=CONTEXT_WINDOW=1000000
 # Login shell so PATH/node and the Claude gateway env from ~/.bashrc apply.
 ExecStart=/bin/bash -lc '%h/bin/cloudcli-start'
-Restart=on-failure
+# Always, not on-failure: an unattended session is only as durable as the server
+# under it, and a clean exit or an outside kill is exactly when nobody is
+# watching. The autonomy loop picks armed sessions back up on the way in.
+Restart=always
 RestartSec=5
 Nice=5
 
