@@ -777,16 +777,17 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
         return (
             '_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
             '?%s.jsxs("details",{className:"kit-wt relative mx-auto mt-4 w-fit '
-            'text-[12px] text-muted-foreground",children:['
-            '%s.jsxs("summary",{className:"flex cursor-pointer list-none items-center gap-2 '
-            'rounded-lg border border-border/60 bg-background px-2 py-1 hover:bg-accent/40 '
-            '[&::-webkit-details-marker]:hidden",children:['
+            'text-muted-foreground",style:{fontSize:"12px"},children:['
+            '%s.jsxs("summary",{className:"flex cursor-pointer items-center gap-2 '
+            'rounded-lg border border-border/60 bg-background px-2 py-1 hover:bg-accent/40",'
+            'style:{listStyle:"none"},children:['
             '%s.jsx("span",{children:"worktree"}),'
             '%s.jsx("span",{className:"kit-wt-now font-mono text-foreground",'
             'children:kitWtNow(_kitProj)}),'
             '%s.jsx("span",{"aria-hidden":true,children:"\u2304"})]}),'
-            '%s.jsx("div",{className:"absolute left-1/2 z-50 mt-1 max-h-72 -translate-x-1/2 '
-            'overflow-auto rounded-lg border border-border/60 bg-background py-1 shadow-lg",'
+            '%s.jsx("div",{className:"absolute z-50 mt-1 overflow-auto rounded-lg border '
+            'border-border/60 bg-background py-1 shadow-lg",'
+            'style:{left:"50%%",transform:"translateX(-50%%)",maxHeight:"18rem"},'
             'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsxs("button",'
             '{type:"button",title:_w.path,'
             'onClick:_e=>kitWtPick(_kitProj,_w,_e.currentTarget),'
@@ -795,8 +796,8 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
             # The label column is wide enough for the longest of them and does
             # not shrink, which is the whole trick: the divider that follows is
             # therefore at the same offset on every row.
-            '%s.jsx("span",{className:"min-w-[10rem] shrink-0 font-mono text-foreground",'
-            'children:_w.label||"main"}),'
+            '%s.jsx("span",{className:"shrink-0 font-mono text-foreground",'
+            'style:{minWidth:"10rem"},children:_w.label||"main"}),'
             '%s.jsx("span",{className:"border-l border-border/60 pl-2 font-mono",'
             'children:_w.branch||""})]},_w.path))})]}):null,%s'
             % (j, j, j, j, j, j, j, j, j, m.group(0)))

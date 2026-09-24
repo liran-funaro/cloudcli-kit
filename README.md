@@ -955,7 +955,11 @@ either, which is the platform's answer and not a bug to keep working around.
 
 So the list is ordinary elements — `<details>` for the open/closed state, one non-shrinking span
 per column, a `border-l` divider on the second — and the columns line up in whatever font the
-browser chooses, monospace or not. No React state: the choice already lives in localStorage and on
+browser chooses, monospace or not. With one catch that cost a third attempt: **Tailwind compiles
+only the classes upstream's own source mentions**, so `min-w-[10rem]`, `max-h-72`, `list-none` and
+even `text-[12px]` are no-ops in the shipped CSS. A patch can use the classes that are already
+there and must put anything else in an inline style. The check now reads the shipped stylesheet and
+fails on any class in the picker that is not in it. No React state: the choice already lives in localStorage and on
 the global the send reads, so the click writes the summary text, shuts the disclosure, and that is
 the whole widget. One document listener closes it when you click elsewhere, which `<details>` does
 not do by itself.

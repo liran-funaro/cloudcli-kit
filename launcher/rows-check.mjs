@@ -161,7 +161,8 @@ const picker = src.slice(src.indexOf('_kitProj&&(_kitProj._kitWorktrees||[]).len
 assert.ok(picker.length > 200 && picker.length < 4000, 'picker markup not found in the bundle');
 for (const needed of [
   'jsxs("details"', 'kit-wt relative',          // open/closed with no React state
-  'min-w-[10rem] shrink-0',                     // the label column, fixed width
+  'shrink-0 font-mono text-foreground',         // the label column ...
+  'style:{minWidth:"10rem"}',                   // ... whose width cannot be a class
   'border-l border-border/60 pl-2',             // the divider, on every row
   'onClick:_e=>kitWtPick(', 'title:_w.path',
 ]) {
@@ -169,6 +170,28 @@ for (const needed of [
 }
 assert.ok(!picker.includes('"option"') && !picker.includes('u00a0'),
   'no native options and no padded text: alignment must not depend on a font');
+
+// Tailwind compiles only the classes upstream's own source mentions, so a class
+// this patch invents is a no-op in the shipped CSS -- which is exactly how the
+// columns came out unaligned with the markup already correct. Every class the
+// picker uses has to exist; anything else belongs in an inline style, and the
+// four that carry the layout are checked by name.
+const cssFile = fs.readdirSync(`${process.argv[3]}/dist/assets`)
+  .find((f) => /^index-.*\.css$/.test(f));
+assert.ok(cssFile, 'no shipped stylesheet to check classes against');
+const css = fs.readFileSync(`${process.argv[3]}/dist/assets/${cssFile}`, 'utf8');
+const escape = (cls) => cls.replace(/[.:/[\]%()&]/g, (ch) => `\\${ch}`);
+const ours = new Set(['kit-wt', 'kit-wt-now']);   // selector hooks, never styling
+for (const match of picker.matchAll(/className:"([^"]+)"/g)) {
+  for (const cls of match[1].split(/\s+/).filter(Boolean)) {
+    if (ours.has(cls)) continue;
+    assert.ok(css.includes(`.${escape(cls)}`), `class ${cls} is not in the shipped CSS`);
+  }
+}
+for (const style of ['minWidth:"10rem"', 'maxHeight:"18rem"', 'listStyle:"none"',
+  'fontSize:"12px"']) {
+  assert.ok(picker.includes(style), `the layout needs ${style} inline, not as a class`);
+}
 
 // The click handler updates the summary and closes the disclosure, since nothing
 // else will: run the injected helpers against a fake row and check both.
