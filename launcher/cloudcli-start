@@ -702,12 +702,75 @@ KIT_AUT_HELPERS = (
     # NOT set here: a session runs autonomously with whatever it already had, and
     # widening that is a decision for `cloudcli-autonomous --permission`, made on
     # purpose, not a side effect of clicking a clock.
+    # Tomorrow at nine, in the shape <input type=datetime-local> wants.
+    'function kitAutSoon(){const _d=new Date(Date.now()+864e5);_d.setHours(9,0,0,0);'
+    'const _p=_n=>String(_n).padStart(2,"0");'
+    'return _d.getFullYear()+"-"+_p(_d.getMonth()+1)+"-"+_p(_d.getDate())'
+    '+"T"+_p(_d.getHours())+":"+_p(_d.getMinutes())}\n'
+    # Not a copy of the prompt: the server hands over the very text it will send,
+    # built by the same function, so the dialog cannot drift from the turn.
+    'async function kitAutPrompt(_until){try{'
+    'const _r=await fetch("/api/scheduled-messages/kit-autonomy/prompt?until="'
+    '+encodeURIComponent(_until||""),{headers:{Authorization:"Bearer "+kitAutTok()}});'
+    'if(!_r.ok)return "";const _j=await _r.json();'
+    'return (_j&&_j.data&&_j.data.prompt)||""}catch{return ""}}\n'
+    'function kitAutAsk(){return new Promise(_done=>{'
+    'const _ov=document.createElement("div");'
+    '_ov.style.cssText="position:fixed;inset:0;z-index:9999;display:flex;'
+    'align-items:center;justify-content:center;padding:1rem;background:rgba(0,0,0,.5)";'
+    'const _box=document.createElement("div");'
+    '_box.style.cssText="width:100%;max-width:44rem;max-height:82vh;overflow:auto;'
+    'padding:1rem 1.1rem;border-radius:.75rem;font-size:13px;'
+    'background:hsl(var(--background,0 0% 100%));color:hsl(var(--foreground,222 47% 11%));'
+    'box-shadow:0 12px 48px rgba(0,0,0,.45)";'
+    'const _h=document.createElement("div");'
+    '_h.textContent="Keep this session working while you are away";'
+    '_h.style.cssText="font-weight:600;margin-bottom:.75rem";'
+    'const _l1=document.createElement("label");'
+    '_l1.textContent="You are back at";'
+    '_l1.style.cssText="display:block;opacity:.75;margin-bottom:.25rem";'
+    'const _when=document.createElement("input");'
+    '_when.type="datetime-local";_when.value=kitAutSoon();'
+    '_when.style.cssText="width:100%;padding:.4rem .5rem;margin-bottom:.9rem;'
+    'border-radius:.5rem;border:1px solid hsl(var(--border,214 32% 91%));'
+    'background:transparent;color:inherit;font:inherit";'
+    'const _l2=document.createElement("label");'
+    '_l2.textContent="The turn that will be sent, every time this session goes idle";'
+    '_l2.style.cssText="display:block;opacity:.75;margin-bottom:.25rem";'
+    'const _text=document.createElement("textarea");'
+    '_text.readOnly=true;_text.rows=14;_text.value="reading the prompt...";'
+    '_text.style.cssText="width:100%;padding:.5rem;border-radius:.5rem;resize:vertical;'
+    'border:1px solid hsl(var(--border,214 32% 91%));background:transparent;color:inherit;'
+    'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.45";'
+    'const _row=document.createElement("div");'
+    '_row.style.cssText="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.9rem";'
+    'const _mk=(_t,_primary)=>{const _b=document.createElement("button");'
+    '_b.type="button";_b.textContent=_t;'
+    '_b.style.cssText="padding:.35rem .8rem;border-radius:.5rem;font:inherit;cursor:pointer;'
+    'border:1px solid hsl(var(--border,214 32% 91%));"'
+    '+(_primary?"background:hsl(var(--primary,222 47% 11%));'
+    'color:hsl(var(--primary-foreground,0 0% 100%))":"background:transparent;color:inherit");'
+    'return _b};'
+    'const _cancel=_mk("Cancel",false),_arm=_mk("Start",true);'
+    '_row.appendChild(_cancel);_row.appendChild(_arm);'
+    '_box.appendChild(_h);_box.appendChild(_l1);_box.appendChild(_when);'
+    '_box.appendChild(_l2);_box.appendChild(_text);_box.appendChild(_row);'
+    '_ov.appendChild(_box);document.body.appendChild(_ov);'
+    'const _show=async()=>{_text.value=(await kitAutPrompt(_when.value))'
+    '||"(the server could not build the prompt -- the autonomy patch may not be applied)"};'
+    '_show();_when.addEventListener("change",_show);'
+    'const _close=_v=>{_ov.remove();document.removeEventListener("keydown",_key);_done(_v)};'
+    'const _key=_e=>{if(_e.key==="Escape")_close(null)};'
+    'document.addEventListener("keydown",_key);'
+    '_ov.addEventListener("click",_e=>{if(_e.target===_ov)_close(null)});'
+    '_cancel.addEventListener("click",()=>_close(null));'
+    '_arm.addEventListener("click",()=>_close({until:_when.value}));'
+    '_when.focus()})}\n'
     'async function kitAutToggle(_ev,sessionId){'
     '_ev.preventDefault();_ev.stopPropagation();'
     'const armed=!!(window.__kitAut&&window.__kitAut[sessionId]);'
     'let until=null;'
-    'if(!armed){until=window.prompt("Keep working while you are away. When are you back?",'
-    '"tomorrow 09:00");if(until===null)return}'
+    'if(!armed){const _ans=await kitAutAsk();if(!_ans)return;until=_ans.until}'
     'try{await fetch("/api/scheduled-messages/kit-autonomy",{method:"POST",'
     'headers:{"Content-Type":"application/json",Authorization:"Bearer "+kitAutTok()},'
     'body:JSON.stringify({sessionId,armed:!armed,until})});'
@@ -748,6 +811,28 @@ elif counts == (1, 2):
     applied.append('autonomy chip')
 else:
     missing.append('worktree badge (%s matches)' % '/'.join(str(c) for c in counts))
+
+# (15) ... and the same chip in the Conversations tab, which renders a row of its
+# own rather than the project row above. The title span is unique in the bundle,
+# so the chip goes beside it, inside a flex line of their own.
+RECENT = re.compile(r'(\w+)\.jsx\("span",\{className:"block truncate text-\[13px\] '
+                    r'font-normal leading-4",children:(\w+)\.sessionTitle\}\)')
+if 'kit-aut-recent' in s:
+    missing.append('autonomy chip, conversations (already marked)')
+elif len(RECENT.findall(s)) == 1:
+    s = RECENT.sub(lambda m: '%s.jsxs("span",{className:"flex items-center gap-1",'
+                   '"data-kit-aut-recent":"1",children:['
+                   '%s.jsx("span",{className:"block min-w-0 flex-1 truncate text-[13px] '
+                   'font-normal leading-4",children:%s.sessionTitle}),'
+                   '%s.jsx("span",{className:"flex-shrink-0 cursor-pointer text-[11px]",'
+                   '"data-kit-aut":%s.sessionId,'
+                   'onClick:_ev=>kitAutToggle(_ev,%s.sessionId),'
+                   'ref:_e=>{if(!_e)return;kitAutPoll();kitAutDraw(_e)}})]})'
+                   % (m.group(1), m.group(1), m.group(2), m.group(1), m.group(2),
+                      m.group(2)), s, count=1)
+    applied.append('autonomy chip, conversations')
+else:
+    missing.append('autonomy chip, conversations (%d matches)' % len(RECENT.findall(s)))
 
 # (14) Which checkout a new session runs in, in the panel that asks the rest of
 # it. A new conversation opens with the provider/model card at the top of the
@@ -3082,7 +3167,7 @@ function kitAutWhen(iso) {
     const when = new Date(iso);
     return Number.isNaN(when.getTime()) ? String(iso) : when.toString();
 }
-function kitAutNudge(entry) {
+export function kitAutNudge(entry) {
     if (entry.nudge) {
         return entry.nudge;
     }
@@ -3354,6 +3439,21 @@ router.get('/kit-autonomy', asyncHandler(async (req, res) => {
                 since: entry.since ?? null,
                 nudges: Number(entry.nudges) || 0,
             }]))));
+}));
+router.get('/kit-autonomy/prompt', asyncHandler(async (req, res) => {
+    const raw = typeof req.query.until === 'string' ? req.query.until : '';
+    const until = raw && !Number.isNaN(new Date(raw).getTime())
+        ? new Date(raw).toISOString()
+        : null;
+    let prompt = '';
+    try {
+        const { kitAutNudge } = await import('./services/scheduled-message-dispatcher.service.js');
+        prompt = typeof kitAutNudge === 'function' ? kitAutNudge({ until }) : '';
+    }
+    catch {
+        prompt = '';
+    }
+    res.json(createApiSuccessResponse({ prompt, until }));
 }));
 router.post('/kit-autonomy', asyncHandler(async (req, res) => {
     const body = (req.body ?? {});

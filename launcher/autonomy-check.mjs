@@ -68,7 +68,15 @@ const loadable = path.join(root, 'dispatcher.mjs');
 fs.writeFileSync(loadable, src
     .replace("'../../../modules/database/index.js'", JSON.stringify(dbStub))
     .replace("'../../../modules/websocket/index.js'", JSON.stringify(wsStub)));
-const { kitAutonomyPass } = await import(loadable);
+const { kitAutonomyPass, kitAutNudge } = await import(loadable);
+
+// The dialog shows the turn before it is sent, and it must be THE turn: the
+// prompt route hands out kitAutNudge's own output, so that has to be exported
+// and has to name the time it is given.
+assert.equal(typeof kitAutNudge, 'function', 'the prompt route needs kitAutNudge exported');
+const preview = kitAutNudge({ until: '2026-09-29T07:00:00Z' });
+assert.ok(preview.includes('Autonomous mode'), 'the preview is the real nudge');
+assert.ok(/2026/.test(preview), 'and names the return time the picker chose');
 
 const armed = (extra = {}) => ({ state: 'running', since: '2026-09-20T00:00:00Z', nudges: 0,
     userId: 1, ...extra });

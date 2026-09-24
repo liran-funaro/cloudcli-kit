@@ -1021,9 +1021,15 @@ memory, so a crash, an upgrade or one of this launcher's own restarts ends the w
 says so. A session left to run over a weekend can be idle by Friday evening, and you find out on
 Monday.
 
-**Autonomous mode is per session.** Click the clock on a session's row in the sidebar — faint on
-every row, solid on an armed one, and the row is the one place the session id was already in scope
-without threading a prop through three components — say when you are back, and from then on the loop keeps that session moving: every pass, an armed
+**Autonomous mode is per session.** Click the clock on a session's row — faint on every row, solid
+on an armed one. Both sidebar tabs have it: Projects and Conversations render *different* rows (the
+worktree badge's two-site edit covers only the first), so the chip is two patches. The row is the
+one place the session id was already in scope without threading a prop through three components.
+
+The dialog that opens has a date picker for when you are back and **the exact turn that will be
+sent**, in a read-only box that updates as you change the date. It is not a copy of the prompt: the
+server hands over `kitAutNudge`'s own output through a route built for it, so what you read cannot
+drift from what the loop sends. Then say when you are back, and from then on the loop keeps that session moving: every pass, an armed
 session that is not already running gets a turn asking it to continue. Recovering a killed run is
 the same act from the other direction — the transcript is the state, so nothing has to be
 remembered about what the dead process was doing.
