@@ -895,8 +895,8 @@ as one list, newest first, with the worktree named on each row:
 
 ```
 ▾ acme-server
-    ● fix the flaky test          .wt-1   2m
-    ● cache size probe       .storage1h
+    ● fix the flaky test     .wt-1      2m
+    ● cache size probe       .storage   1h
     ● tidy the teardown                 3h
 ```
 
@@ -932,11 +932,11 @@ Each option names the checkout and **the branch it has out**, which is what tell
 apart when the directory names do not:
 
 ```
-worktree [ main              release/2.x        ⌄ ]
-           .signing             feat/faster-signing
+worktree [ main              release/2.x           ⌄ ]
+           .signing          feat/faster-signing
            .storage          design/storage
            .wt-2             detached
-           .storage
+           .archive
 ```
 
 `git worktree list --porcelain` reports the branch in the same call that reports the paths, so
