@@ -2739,6 +2739,105 @@ SUBPY
   fi
 fi
 
+# --- patch 17: which directory a transcript actually belongs to ----------------
+# A session's project comes from the FIRST `cwd` in its transcript. That is the
+# wrong end of the file when a transcript carries history from somewhere else --
+# a session resumed from another machine keeps those early lines, and this one
+# opens with 4000 of them naming /Users/<me>/... -- so the session is filed under
+# a project that does not exist on this host. The transcript's own directory is
+# the reliable answer: Claude names it after the cwd, with everything but letters
+# and digits turned into '-'. Prefer the cwd that encodes to that name; fall back
+# to the first one when none does. Only a mismatch reads the file.
+SYNC="$PKG/dist-server/server/modules/providers/list/claude/claude-session-synchronizer.provider.js"
+if [[ -f $SYNC ]]; then
+  if ! grep -q KIT "$SYNC"; then
+    cp "$SYNC" "$SYNC.kitorig"
+  elif [[ -f $SYNC.kitorig ]]; then
+    cp "$SYNC.kitorig" "$SYNC"
+    [[ ${CLOUDCLI_SESSION_CWD:-1} == 1 ]] && echo "  re-patching the session synchronizer from the packaged original"
+  fi
+fi
+if [[ ${CLOUDCLI_SESSION_CWD:-1} == 1 && -f $SYNC ]]; then
+  cp "$SYNC" "$SYNC.prepatch"
+  if python3 - "$SYNC" <<'SYNCPY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+if 'KIT: the transcript directory' in s:
+    print('session cwd: already in place')
+    sys.exit(0)
+
+IMPORT = ("import { buildLookupMap, extractFirstValidJsonlData, "
+          "findFilesRecursivelyCreatedAfter, normalizeSessionName, "
+          "readFileTimestamps, } from '../../../../shared/utils.js';\n")
+assert s.count(IMPORT) == 1, 'utils import'
+HELPERS = """
+// KIT: the transcript directory names the cwd Claude wrote the file for, with
+// every non-alphanumeric character replaced by '-'. The encoding is lossy in
+// one direction only: it cannot be decoded, but a candidate cwd can be encoded
+// and compared, which is enough to pick the right one out of the file.
+function kitEncodeCwd(cwd) {
+    return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+async function kitTranscriptCwd(filePath, firstCwd) {
+    const dir = path.basename(path.dirname(filePath));
+    if (kitEncodeCwd(firstCwd) === dir) {
+        return firstCwd;
+    }
+    let content;
+    try {
+        content = await readFile(filePath, 'utf8');
+    }
+    catch {
+        return firstCwd;
+    }
+    for (const match of content.matchAll(/"cwd":"((?:[^"\\\\]|\\\\.)*)"/g)) {
+        let cwd;
+        try {
+            cwd = JSON.parse(`"${match[1]}"`);
+        }
+        catch {
+            continue;
+        }
+        if (kitEncodeCwd(cwd) === dir) {
+            return cwd;
+        }
+    }
+    return firstCwd;
+}
+"""
+s = s.replace(IMPORT, IMPORT + HELPERS, 1)
+
+OLD = """        if (!parsed) {
+            return null;
+        }
+        // App-created sessions are keyed by an app id"""
+NEW = """        if (!parsed) {
+            return null;
+        }
+        // KIT: history carried in from another host can open the file, so trust
+        // the directory the transcript lives in over the first line in it.
+        parsed.projectPath = await kitTranscriptCwd(filePath, parsed.projectPath);
+        // App-created sessions are keyed by an app id"""
+assert s.count(OLD) == 1, 'processSessionFile anchor'
+s = s.replace(OLD, NEW, 1)
+
+open(path, 'w').write(s)
+print('session cwd: applied')
+SYNCPY
+  then
+    if node --check "$SYNC" >/dev/null 2>&1; then
+      rm -f "$SYNC.prepatch"
+    else
+      mv "$SYNC.prepatch" "$SYNC"
+      echo "WARNING: the session-cwd patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$SYNC.prepatch" "$SYNC"
+  fi
+fi
+
 # --- anchor self-check ------------------------------------------------------
 # Every patch above hangs off something upstream happens to do: a Tailwind
 # class, a CSS variable, a localStorage key. None of that is a published

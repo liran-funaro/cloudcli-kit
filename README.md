@@ -959,6 +959,33 @@ git twice.
 real worktrees, one of them removed properly mid-test, plus a lookalike directory and a
 foreign-root path that must both stay separate.
 
+## The directory a transcript belongs to
+
+```bash
+CLOUDCLI_SESSION_CWD=0 cloudcli-start   # first line wins, as upstream builds it
+```
+
+A session's project comes from the **first** `cwd` in its transcript, which is the wrong end of
+the file. A transcript can carry history in from somewhere else — a session resumed from another
+machine keeps those early lines — and then the session is filed under a path that does not exist
+on this host. One session here opened with 4,000 lines naming `/Users/<me>/workspace/…` before
+the first local line, and appeared under a `acme-server` project of its own instead of
+the repository it was actually running in.
+
+The transcript's own directory is the reliable answer: Claude names it after the cwd, with every
+character that is not a letter or digit turned into `-`. That encoding cannot be decoded — `-`
+could have been `/` or `.` — but a candidate *can* be encoded and compared, so the patch takes
+the first `cwd` in the file that encodes to the directory's name and keeps the old behaviour when
+none does. The file is only read when the first line already disagrees, which is almost never.
+
+A project row left empty by the correction stays in the list until you delete it in the UI; the
+kit does not write to `auth.db`.
+
+`launcher/session-cwd-check.mjs` drives the patched synchronizer over transcripts built for it:
+carried-in history first, an ordinary transcript that must not be re-read, a dotted worktree path
+recovered with its dot intact, a directory matching nothing that must keep the first `cwd`, and a
+transcript with no `cwd` at all, which is not a session.
+
 ## The model alias, pinned
 
 ```bash
