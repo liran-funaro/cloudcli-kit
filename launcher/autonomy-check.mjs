@@ -174,7 +174,25 @@ store = read();
 assert.notEqual(store['s-work'].reported, firstReport, 'after a day, one report goes out');
 assert.equal(store['s-work'].spendSince, 10, 'and states the spend since arming (100 - 90)');
 
-// 7. nothing armed, and a corrupt file, are both quiet no-ops rather than throws.
+// 7. a wall of denied tool calls stops the loop: approvals go to a browser nobody
+//    is watching, so nudging into that only spends money.
+const walled = transcript('walled',
+    'I tried to copy the build over.\n\nPermission request timed out');
+sessions['s-walled'] = { session_id: 's-walled', jsonl_path: walled };
+write({ 's-walled': armed() });
+await kitAutonomyPass({});
+assert.equal(read()['s-walled'].state, 'blocked', 'timed-out approvals must stop the loop');
+assert.match(read()['s-walled'].why, /approvals/, 'and say why');
+
+// 8. the options a nudge runs with carry the user's own tool settings, and the
+//    mode chosen at arming -- a turn without them is denied everything.
+sent.length = 0;
+write({ 's-work': armed({ options: { permissionMode: 'auto' } }) });
+await kitAutonomyPass({});
+assert.equal(sent[0].options.permissionMode, 'auto', 'the chosen mode must reach the turn');
+assert.ok(sent[0].options.toolsSettings, 'and the stored tool settings must travel with it');
+
+// 9. nothing armed, and a corrupt file, are both quiet no-ops rather than throws.
 fs.writeFileSync(state, '{ this is not json');
 assert.equal(await kitAutonomyPass({}), 0, 'a corrupt state file must not throw');
 fs.writeFileSync(state, '{}');

@@ -698,18 +698,6 @@ KIT_AUT_HELPERS = (
     'for(const _n of document.querySelectorAll("[data-kit-aut]"))kitAutDraw(_n)'
     '}catch{}};'
     'window.__kitAutTimer=setInterval(_p,3e4);_p()}\n'
-    # Arming asks only when the user is back, and it carries the session's own
-    # permission mode into the loop. That mode lives in the browser and nowhere
-    # else (localStorage, keyed by the session id, with the provider's last choice
-    # behind it), so if the chip does not send it the nudged turn runs as
-    # 'default': every gated tool call then waits on a human who is away by
-    # definition and is denied with "Permission request timed out". The allow-list
-    # is a user preference, so the server reads that itself. This copies what the
-    # session already had -- widening is still `cloudcli-autonomous --permission`,
-    # chosen on purpose.
-    'function kitAutPerm(sessionId){try{'
-    'return localStorage.getItem("permissionMode-"+sessionId)'
-    '||localStorage.getItem("permissionMode-last-claude")||""}catch{return ""}}\n'
     # Tomorrow at nine, in the shape <input type=datetime-local> wants.
     'function kitAutSoon(){const _d=new Date(Date.now()+864e5);_d.setHours(9,0,0,0);'
     'const _p=_n=>String(_n).padStart(2,"0");'
@@ -734,10 +722,34 @@ KIT_AUT_HELPERS = (
     'const _h=document.createElement("div");'
     '_h.textContent="Keep this session working while you are away";'
     '_h.style.cssText="font-weight:600;margin-bottom:.5rem";'
+    # Claude keeps no per-session permission mode the browser can read, so this
+    # is a question rather than an inheritance -- and the answer matters more here
+    # than anywhere else in the app: with nobody watching, a gated call is denied
+    # 55 seconds later, which is how a weekend's work stops after one turn.
+    'const _l3=document.createElement("label");'
+    '_l3.textContent="Permissions while you are away";'
+    '_l3.style.cssText="display:block;opacity:.75;margin-bottom:.25rem";'
+    'const _mode=document.createElement("select");'
+    '_mode.style.cssText="width:100%;padding:.4rem .5rem;margin-bottom:.35rem;'
+    'border-radius:.5rem;border:1px solid hsl(var(--border,214 32% 91%));'
+    'background:transparent;color:inherit;font:inherit";'
+    'for(const _o of [["auto","auto -- the classifier decides, nothing is asked"],'
+    '["","ask, exactly as now"],'
+    '["acceptEdits","accept file edits, ask for the rest"],'
+    '["bypassPermissions","run everything without asking"]]){'
+    'const _op=document.createElement("option");_op.value=_o[0];_op.textContent=_o[1];'
+    '_mode.appendChild(_op)}'
     'const _m=document.createElement("div");'
-    '_m.textContent="Permission mode, as this session last had it: "'
-    '+(kitAutPerm(sessionId)||"default");'
-    '_m.style.cssText="opacity:.75;margin-bottom:.75rem";'
+    '_m.style.cssText="opacity:.7;margin-bottom:.9rem;line-height:1.4";'
+    'const _setWarn=()=>{_m.textContent=_mode.value==="auto"'
+    '?"The SDK decides each call itself and never asks the browser -- what this '
+    'deployment already defaults to."'
+    ':_mode.value===""?"Nothing will be there to answer: a tool needing approval is '
+    'denied after 55 seconds, and the session stops."'
+    ':_mode.value==="acceptEdits"?"File edits run; a command needing approval is '
+    'still denied after 55 seconds."'
+    ':"Every tool runs unattended, including commands that reach other machines."};'
+    '_setWarn();_mode.addEventListener("change",_setWarn);'
     'const _l1=document.createElement("label");'
     '_l1.textContent="You are back at";'
     '_l1.style.cssText="display:block;opacity:.75;margin-bottom:.25rem";'
@@ -765,7 +777,8 @@ KIT_AUT_HELPERS = (
     'return _b};'
     'const _cancel=_mk("Cancel",false),_arm=_mk("Start",true);'
     '_row.appendChild(_cancel);_row.appendChild(_arm);'
-    '_box.appendChild(_h);_box.appendChild(_m);_box.appendChild(_l1);_box.appendChild(_when);'
+    '_box.appendChild(_h);_box.appendChild(_l1);_box.appendChild(_when);'
+    '_box.appendChild(_l3);_box.appendChild(_mode);_box.appendChild(_m);'
     '_box.appendChild(_l2);_box.appendChild(_text);_box.appendChild(_row);'
     '_ov.appendChild(_box);document.body.appendChild(_ov);'
     'const _show=async()=>{_text.value=(await kitAutPrompt(_when.value))'
@@ -776,17 +789,19 @@ KIT_AUT_HELPERS = (
     'document.addEventListener("keydown",_key);'
     '_ov.addEventListener("click",_e=>{if(_e.target===_ov)_close(null)});'
     '_cancel.addEventListener("click",()=>_close(null));'
-    '_arm.addEventListener("click",()=>_close({until:_when.value}));'
+    '_arm.addEventListener("click",()=>_close({until:_when.value,mode:_mode.value}));'
     '_when.focus()})}\n'
     'async function kitAutToggle(_ev,sessionId){'
     '_ev.preventDefault();_ev.stopPropagation();'
     'const armed=!!(window.__kitAut&&window.__kitAut[sessionId]);'
     'let until=null;'
-    'if(!armed){const _ans=await kitAutAsk(sessionId);if(!_ans)return;until=_ans.until}'
+    'let mode="";'
+    'if(!armed){const _ans=await kitAutAsk(sessionId);if(!_ans)return;'
+    'until=_ans.until;mode=_ans.mode||""}'
     'try{await fetch("/api/scheduled-messages/kit-autonomy",{method:"POST",'
     'headers:{"Content-Type":"application/json",Authorization:"Bearer "+kitAutTok()},'
     'body:JSON.stringify({sessionId,armed:!armed,until,'
-    'permissionMode:kitAutPerm(sessionId)||null})});'
+    'permissionMode:mode||null})});'
     'window.__kitAut=window.__kitAut||{};'
     'if(armed){delete window.__kitAut[sessionId]}'
     'else{window.__kitAut[sessionId]={until,nudges:0}}'
@@ -3325,6 +3340,15 @@ export async function kitAutonomyPass(runtime) {
         }
         if (said.includes(KIT_AUT_BLOCKED)) {
             kitAutDisarm(store, sessionId, 'blocked', 'the agent reported it cannot continue', spend);
+            changed = true;
+            continue;
+        }
+        // In the modes that ask, approval goes to a browser nobody is watching and
+        // is denied 55 seconds later. A turn that ends on that is walled in, and
+        // more nudges only spend money -- so this reads as "cannot continue" too.
+        if (/Permission request timed out/.test(said)) {
+            kitAutDisarm(store, sessionId, 'blocked',
+                'tool approvals timed out -- nobody is there to answer them', spend);
             changed = true;
             continue;
         }

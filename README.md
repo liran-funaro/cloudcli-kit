@@ -1026,7 +1026,14 @@ on an armed one. Both sidebar tabs have it: Projects and Conversations render *d
 worktree badge's two-site edit covers only the first), so the chip is two patches. The row is the
 one place the session id was already in scope without threading a prop through three components.
 
-The dialog that opens has a date picker for when you are back and **the exact turn that will be
+The dialog that opens asks three things. **When you are back** (a date picker). **What permissions
+the turns run with** — `auto`, which is what this deployment defaults to and the only mode that
+suits being away: the SDK resolves each call itself and never asks the browser
+(`claude-runtime.provider.js:1033`). The alternatives are spelled out next to it, including what
+"ask, exactly as now" means when nobody is there to answer — the request is denied 55 seconds later
+and the session stops. It is a question rather than an inheritance because Claude keeps no
+per-session mode anywhere the browser can read; an earlier version of this guessed at a
+`localStorage` key that does not exist, and inherited nothing. And **the exact turn that will be
 sent**, in a read-only box that updates as you change the date. It is not a copy of the prompt: the
 server hands over `kitAutNudge`'s own output through a route built for it, so what you read cannot
 drift from what the loop sends. Then say when you are back, and from then on the loop keeps that session moving: every pass, an armed
@@ -1070,6 +1077,15 @@ running in Auto Mode, where the classifier decides per call and no human is need
 an entry added while the user is away applies to the next turn. Arming from the CLI cannot see the
 browser's mode, so `cloudcli-autonomous` without `--permission` leaves the turns on `default`, which
 asks; that is what `--permission auto` is for.
+
+**Permissions are the thing that decides whether any of this works.** CloudCLI installs its own
+`canUseTool`, so the CLI's own permission settings do not apply to a run the app drives: a tool is
+allowed without asking only in `auto`/`bypassPermissions`, or when the call matches the allow-list
+in the `claudePermissions` preference. Anything else is asked, and an unanswered request is denied
+after 55 seconds. The loop therefore sends the user's own tool settings with every nudge — the
+composer sends them per message and the server keeps no copy, so a turn started here would
+otherwise run with an empty allow-list — and a turn that ends on `Permission request timed out`
+disarms the session as blocked instead of nudging into a wall for the rest of the weekend.
 
 **What it does not do.** It does not resume a turn mid-tool-call: the nudge is a new turn and the
 model reads its own transcript. It does not widen permissions — it copies what the session already
