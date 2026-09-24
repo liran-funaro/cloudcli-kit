@@ -173,4 +173,13 @@ assert.ok(bars[0] >= '.signing'.length, 'labels must pad to the widest one');
 assert.ok(lines[2].endsWith('\u00a0'), 'a branchless row still draws its bar');
 assert.ok(!lines.some((l) => / {2}/.test(l)), 'padding must be non-breaking, not spaces');
 
+//    ... and the face the options are drawn in has to travel with them, since the
+//    popup is the browser's own widget and does not reliably inherit the select's.
+const fontStart = src.indexOf('const KIT_WT_FONT=');
+assert.ok(fontStart > 0, 'KIT_WT_FONT not found in the bundle');
+const font = new Function(src.slice(fontStart, src.indexOf('\n', fontStart)) + ';return KIT_WT_FONT')();
+assert.match(font.fontFamily, /monospace$/, 'options must fall back to monospace');
+assert.ok(src.includes('title:_w.path,style:KIT_WT_FONT'),
+  'every option must carry the face inline');
+
 console.log('all checks passed');

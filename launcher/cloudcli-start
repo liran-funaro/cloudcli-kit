@@ -728,6 +728,8 @@ KIT_WT_HELPERS = (
     # label is padded to the widest one with non-breaking spaces (a plain run of
     # spaces collapses) and a box-drawing bar is drawn between the columns. Only
     # lines up under a monospace face, which the select asks for.
+    'const KIT_WT_FONT={fontFamily:'
+    '"ui-monospace,SFMono-Regular,Menlo,Consolas,\\"Liberation Mono\\",monospace"};\n'
     'function kitWtText(project,w){'
     'const labels=((project&&project._kitWorktrees)||[]).map(x=>x.label||"main");'
     'const label=w.label||"main";'
@@ -767,7 +769,12 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
                   'defaultValue:kitWtValue(_kitProj),'
                   'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
                   'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
-                  '{value:_w.path,title:_w.path,'
+                  # The popup list is the browser's own widget and it does not
+                  # reliably inherit the select's font, which leaves the padding
+                  # aligned against a proportional face -- i.e. not aligned. Each
+                  # option carries the face itself, inline, where nothing can
+                  # override it.
+                  '{value:_w.path,title:_w.path,style:KIT_WT_FONT,'
                   # The branch is what tells two checkouts apart when the
                   # directory names do not, so it rides along in a second column
                   # -- empty where git reports none, the bar drawn regardless so

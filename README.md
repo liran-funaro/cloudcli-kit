@@ -945,8 +945,13 @@ checkout git no longer lists — a deleted worktree — carries no branch at all
 
 A native `<select>` has nothing but option text to lay out with, so the label is padded to the
 widest one with non-breaking spaces — a plain run of spaces collapses — and a bar is drawn
-between the columns, which only lines up because the select asks for a monospace face. The bar is
-drawn on a branchless row too, so the column reads as one.
+between the columns, which only lines up in a monospace face. The bar is drawn on a branchless row
+too, so the column reads as one.
+
+The face has to be set **on each option, inline**, not just on the select: the open list is the
+browser's own widget and does not reliably inherit from the select, so a Tailwind class there
+styles the closed control and leaves the list proportional — padding aligned against a font that
+cannot align.
 
 The list travels with the project row rather than being fetched, because the client cannot
 reach `/api/worktrees` without the app's own auth helper — and it includes worktrees that were
