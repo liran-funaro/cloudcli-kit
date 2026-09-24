@@ -2446,7 +2446,7 @@ function kitOrphanRepo(orphanPath, repoRoots) {
     return best;
 }
 
-function kitWorktreeIndex(projectRows) {
+export function kitWorktreeIndex(projectRows) {
     if (Date.now() - kitWtCache.at < KIT_WT_TTL_MS) {
         return kitWtCache;
     }
@@ -2487,7 +2487,7 @@ function kitWorktreeIndex(projectRows) {
  * the repository's own name does not account for -- `.wt-1` out of
  * `acme-server.wt-1` -- and nothing at all for the main checkout.
  */
-function kitWorktreeLabel(repoRoot, sessionPath) {
+export function kitWorktreeLabel(repoRoot, sessionPath) {
     if (!sessionPath || sessionPath === repoRoot) {
         return '';
     }
@@ -2618,6 +2618,88 @@ WTPY
     fi
   else
     mv "$PWS.prepatch" "$PWS"
+  fi
+fi
+
+# --- patch 16: the live broadcast has to coalesce too --------------------------
+# The projects list folds worktrees into their repository, but `session_upserted`
+# does not: it names the session's OWN project, so the first message of a session
+# in a worktree made the sidebar add a row for that worktree -- which vanished on
+# the next refresh, when the coalesced list replaced it. The broadcast now names
+# the repository instead, and carries the worktree label so the row is badged
+# live rather than only after a reload.
+SUB="$PKG/dist-server/server/modules/websocket/services/session-upsert-broadcast.service.js"
+if [[ -f $SUB ]]; then
+  if ! grep -q KIT "$SUB"; then
+    cp "$SUB" "$SUB.kitorig"
+  elif [[ -f $SUB.kitorig ]]; then
+    cp "$SUB.kitorig" "$SUB"
+    [[ ${CLOUDCLI_WORKTREES:-1} == 1 ]] && echo "  re-patching the session broadcast from the packaged original"
+  fi
+fi
+if [[ ${CLOUDCLI_WORKTREES:-1} == 1 && -f $SUB ]]; then
+  cp "$SUB" "$SUB.prepatch"
+  if python3 - "$SUB" <<'SUBPY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+if 'KIT: the repository owns the row' in s:
+    print('broadcast: already in place')
+    sys.exit(0)
+
+IMPORT = "import { generateDisplayName } from '../../../modules/projects/index.js';\n"
+NEW_IMPORT = IMPORT + ("import { kitWorktreeIndex, kitWorktreeLabel } "
+                       "from '../../../modules/projects/services/"
+                       "projects-with-sessions-fetch.service.js';\n")
+assert s.count(IMPORT) == 1, 'import anchor'
+s = s.replace(IMPORT, NEW_IMPORT, 1)
+
+OLD = """    const projectPath = row.project_path;
+    const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;"""
+NEW = """    const projectPath = row.project_path;
+    // KIT: the repository owns the row a session is shown under, so a session in
+    // a worktree is announced against the repository's project rather than the
+    // worktree's own -- otherwise the sidebar grows a row here that the next
+    // refresh takes away again.
+    const kitIndex = kitWorktreeIndex(projectsDb.getProjectPaths());
+    const kitRepoRoot = projectPath ? kitIndex.repoOf.get(projectPath) ?? null : null;
+    const kitOwner = kitRepoRoot && kitRepoRoot !== projectPath
+        ? projectsDb.getProjectPath(kitRepoRoot)
+        : null;
+    const kitWorktree = kitRepoRoot ? kitWorktreeLabel(kitRepoRoot, projectPath) : '';
+    const project = kitOwner ?? (projectPath ? projectsDb.getProjectPath(projectPath) : null);"""
+assert s.count(OLD) == 1, 'project lookup'
+s = s.replace(OLD, NEW, 1)
+
+# the display name has to describe whichever project is being announced
+OLD_NAME = """        : await generateDisplayName(path.basename(projectPath ?? '') || (projectPath ?? ''), projectPath);"""
+NEW_NAME = """        : await generateDisplayName(path.basename(project?.project_path ?? projectPath ?? '')
+            || (project?.project_path ?? projectPath ?? ''), project?.project_path ?? projectPath);"""
+assert s.count(OLD_NAME) == 1, 'display name'
+s = s.replace(OLD_NAME, NEW_NAME, 1)
+
+# and the row can say which checkout without waiting for a refresh
+OLD_SESSION = """            lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+        },"""
+NEW_SESSION = """            lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+            worktree: kitWorktree,
+        },"""
+assert s.count(OLD_SESSION) == 1, 'session block'
+s = s.replace(OLD_SESSION, NEW_SESSION, 1)
+
+open(path, 'w').write(s)
+print('broadcast: applied')
+SUBPY
+  then
+    if node --check "$SUB" >/dev/null 2>&1; then
+      rm -f "$SUB.prepatch"
+    else
+      mv "$SUB.prepatch" "$SUB"
+      echo "WARNING: the broadcast patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$SUB.prepatch" "$SUB"
   fi
 fi
 

@@ -933,6 +933,13 @@ reach `/api/worktrees` without the app's own auth helper — and it includes wor
 never registered as projects, which is how `.parser`, `.metrics` and `/tmp/baseline`
 appear here without anyone adding them.
 
+**The live path coalesces too.** `session_upserted` named the session's *own* project, so the
+first message of a session in a worktree made the sidebar grow a row for that worktree — which
+the next refresh took away again, since the coalesced list does not contain it. The broadcast
+now names the repository and carries the worktree label, so the row appears in the right place,
+badged, without waiting for a reload. Both halves share one grouping index rather than forking
+git twice.
+
 `launcher/worktree-check.mjs` runs the patched service against a real temporary repository with
 real worktrees, one of them removed properly mid-test, plus a lookalike directory and a
 foreign-root path that must both stay separate.

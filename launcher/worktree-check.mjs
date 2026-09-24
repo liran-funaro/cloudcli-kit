@@ -137,5 +137,50 @@ const page2 = await service.getProjectSessionsPage('p-main', { limit: 2, offset:
 assert.deepEqual(page2.sessions.map((s) => s.id), ['s-main', 's-storage'], 'the second page continues the union');
 assert.equal(page2.sessionMeta.hasMore, false);
 
-fs.rmSync(root, { recursive: true, force: true });
 console.log('worktree coalescing: all checks passed');
+
+// --- the live broadcast must name the repository, not the worktree -----------
+// Regression for the row that appeared on the first message of a worktree
+// session and disappeared on the next refresh.
+{
+  const broadcastFile = process.argv[3];
+  if (broadcastFile && fs.existsSync(broadcastFile)) {
+    const src = fs.readFileSync(broadcastFile, 'utf8')
+      .replace(/^import \{ projectsDb, sessionsDb \} from '.*';$/m,
+        'const projectsDb = globalThis.__kitProjectsDb;\nconst sessionsDb = globalThis.__kitSessionsDb;')
+      .replace(/^import \{ generateDisplayName \} from '.*';$/m,
+        'const generateDisplayName = async (name) => name;')
+      .replace(/^import \{ kitWorktreeIndex, kitWorktreeLabel \} from '.*';$/m,
+        `const { kitWorktreeIndex, kitWorktreeLabel } = await import(${JSON.stringify(moduleFile)});`)
+      .replace(/^import \{ connectedClients, WS_OPEN_STATE \} from '.*';$/m,
+        'const WS_OPEN_STATE = 1;\nconst connectedClients = new Set();');
+    assert.ok(!/^import .*\.\.\//m.test(src),
+      'every relative import was replaced: ' + (src.match(/^import .*\.\.\/.*$/m) || [''])[0]);
+
+    // the broadcast resolves by provider id first, then by session id
+    globalThis.__kitSessionsDb.getSessionByProviderSessionId = () => null;
+    globalThis.__kitSessionsDb.getSessionById = (id) => ({
+      's-wt1': { session_id: 's-wt1', provider: 'claude', project_path: `${repo}.wt-1`, custom_name: 'in a worktree', updated_at: '2026-09-24T10:00:00Z', isArchived: 0 },
+      's-main': { session_id: 's-main', provider: 'claude', project_path: repo, custom_name: 'in the repo', updated_at: '2026-09-24T09:00:00Z', isArchived: 0 },
+    }[id] ?? null);
+    globalThis.__kitProjectsDb.getProjectPath = (p) =>
+      projectRows.find((row) => row.project_path === p)
+        ? { project_id: projectRows.find((row) => row.project_path === p).project_id, project_path: p, custom_project_name: null, isStarred: 0 }
+        : null;
+
+    const broadcastModule = path.join(root, 'broadcast.mjs');
+    fs.writeFileSync(broadcastModule, src);
+    const bc = await import(broadcastModule);
+
+    const fromWorktree = await bc.buildSessionUpsertedEvent('s-wt1');
+    assert.equal(fromWorktree.project.path, repo, 'a worktree session is announced against the repository');
+    assert.equal(fromWorktree.session.worktree, '.wt-1', 'and carries its label so the row is badged live');
+
+    const fromRepo = await bc.buildSessionUpsertedEvent('s-main');
+    assert.equal(fromRepo.project.path, repo);
+    assert.equal(fromRepo.session.worktree, '', 'a main-checkout session claims no worktree');
+    console.log('broadcast coalescing: checks passed');
+  }
+}
+
+fs.rmSync(root, { recursive: true, force: true });
