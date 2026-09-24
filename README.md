@@ -882,6 +882,45 @@ that). Dropping one `continue` fixed it.
 That is in 1.37.3 as [#1274](https://github.com/siteboon/claudecodeui/pull/1274), so the kit no
 longer patches it. Kept here as the reason the launcher's report is one line shorter than it was.
 
+## Worktrees, under the repository they belong to
+
+```bash
+CLOUDCLI_WORKTREES=0 cloudcli-start     # one project per worktree, as upstream builds it
+```
+
+A worktree is a checkout of the same repository, so a project per worktree splits one piece of
+work across rows that cannot see each other — six of them here for `acme-server` alone.
+The projects list folds every checkout into the repository's own row and reads their sessions
+as one list, newest first, with the worktree named on each row:
+
+```
+▾ acme-server
+    ● fix the flaky test          .wt-1   2m
+    ● cache size probe       .storage1h
+    ● tidy the teardown                 3h
+```
+
+Discovery is git's rather than a registry of ours — `rev-parse --git-common-dir` says which
+repository a path belongs to, `worktree list --porcelain` says what else belongs to it — so a
+tree made with a plain `git worktree add` is tracked with no project added for it. Both calls
+fork, so the answer is cached for 30 seconds; the sidebar asks on every refresh. "Load more"
+reads the same union, or page two falls back to the main checkout and repeats it.
+
+**A worktree that was deleted** keeps its sessions attributed, which took some looking. Git is
+no help: `worktree list` no longer names it. Nor is the transcript, which records `cwd` (the
+vanished path, nothing new) and `gitBranch` — and that branch is usually deleted with the
+worktree, as `storage/drop-unused-index` was here, present in no repository any
+more. What survives is the path and the convention that made it, so an orphan is attributed to
+the longest repository path it extends, with a separator required after it (`acme-common`
+does not claim `acme-commonwealth`). That is an inference from naming rather than evidence,
+so it applies **only to paths that no longer exist**: nothing live is ever reclassified, and a
+path on another machine — `/Users/…/acme-server` — is left alone rather than merged into
+the local repository's row.
+
+`launcher/worktree-check.mjs` runs the patched service against a real temporary repository with
+real worktrees, one of them removed properly mid-test, plus a lookalike directory and a
+foreign-root path that must both stay separate.
+
 ## The model alias, pinned
 
 ```bash

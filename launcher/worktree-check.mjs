@@ -27,6 +27,19 @@ git(repo, 'commit', '-qm', 'one');
 for (const suffix of ['.wt-1', '.storage']) {
   git(repo, 'worktree', 'add', '-q', '-b', `b${suffix}`, `${repo}${suffix}`);
 }
+// a worktree that was removed properly: git has forgotten it and the directory
+// is gone, exactly like acme-common.storage
+const deleted = `${repo}.gone`;
+git(repo, 'worktree', 'add', '-q', '-b', 'b-gone', deleted);
+git(repo, 'worktree', 'remove', '--force', deleted);
+assert.ok(!fs.existsSync(deleted), 'the removed worktree is really gone');
+assert.ok(!execFileSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+  .includes(deleted), 'and git no longer lists it');
+
+// a directory that merely shares a prefix without a separator, which must NOT
+// be adopted
+const lookalike = path.join(root, 'demo-repository-elsewhere');
+
 const unrelated = path.join(root, 'other-repo');
 fs.mkdirSync(unrelated);
 execFileSync('git', ['init', '-q', unrelated], { stdio: 'ignore' });
@@ -40,6 +53,9 @@ const projectRows = [
   { project_id: 'p-storage', project_path: `${repo}.storage`, custom_project_name: null },
   { project_id: 'p-other', project_path: unrelated, custom_project_name: null },
   { project_id: 'p-plain', project_path: plain, custom_project_name: null },
+  { project_id: 'p-gone', project_path: deleted, custom_project_name: null },
+  { project_id: 'p-look', project_path: lookalike, custom_project_name: null },
+  { project_id: 'p-mac', project_path: '/Users/someone/workspace/demo-repo', custom_project_name: null },
 ];
 const sessionRows = {
   [repo]: [{ session_id: 's-main', provider: 'claude', project_path: repo, updated_at: '2026-09-24T09:00:00Z', custom_name: 'main work' }],
@@ -47,6 +63,9 @@ const sessionRows = {
   [`${repo}.storage`]: [{ session_id: 's-storage', provider: 'claude', project_path: `${repo}.storage`, updated_at: '2026-09-24T08:00:00Z', custom_name: 'older' }],
   [unrelated]: [{ session_id: 's-other', provider: 'claude', project_path: unrelated, updated_at: '2026-09-24T07:00:00Z', custom_name: 'elsewhere' }],
   [plain]: [],
+  [deleted]: [{ session_id: 's-gone', provider: 'claude', project_path: deleted, updated_at: '2026-09-24T09:30:00Z', custom_name: 'work in a worktree since removed' }],
+  [lookalike]: [{ session_id: 's-look', provider: 'claude', project_path: lookalike, updated_at: '2026-09-24T06:00:00Z', custom_name: 'different project' }],
+  ['/Users/someone/workspace/demo-repo']: [{ session_id: 's-mac', provider: 'claude', project_path: '/Users/someone/workspace/demo-repo', updated_at: '2026-09-24T05:00:00Z', custom_name: 'another machine' }],
 };
 
 // Every relative import becomes a fake: node:* stay real, so the code under
@@ -88,21 +107,34 @@ assert.ok(paths.includes(unrelated), 'an unrelated repository is untouched');
 assert.ok(paths.includes(plain), 'a directory that is not a repository is untouched');
 
 const demo = projects.find((p) => p.path === repo);
-assert.deepEqual(demo.sessions.map((s) => s.id), ['s-wt1', 's-main', 's-storage'],
+assert.deepEqual(demo.sessions.map((s) => s.id), ['s-wt1', 's-gone', 's-main', 's-storage'],
   'every checkout, newest first');
-assert.deepEqual(demo.sessions.map((s) => s.worktree), ['.wt-1', '', '.storage'],
+assert.deepEqual(demo.sessions.map((s) => s.worktree), ['.wt-1', '.gone', '', '.storage'],
   'each row says which worktree, and the main checkout says nothing');
-assert.equal(demo.sessionMeta.total, 3, 'the total counts every checkout');
+assert.equal(demo.sessionMeta.total, 4, 'the total counts every checkout, deleted ones included');
 
 const other = projects.find((p) => p.path === unrelated);
 assert.equal(other.sessions.length, 1);
 assert.equal(other.sessions[0].worktree, undefined, 'a lone project gains no label');
 
+// --- a deleted worktree's sessions are still attributed to the repository ----
+assert.ok(!paths.includes(deleted), 'the vanished worktree is not a row of its own');
+assert.deepEqual(demo.sessions.map((s) => s.id), ['s-wt1', 's-gone', 's-main', 's-storage'],
+  'its session sits in the repository list, in recency order');
+const gone = demo.sessions.find((s) => s.id === 's-gone');
+assert.equal(gone.worktree, '.gone', 'and says which worktree it came from');
+
+// --- but naming alone must not adopt anything that merely looks similar ------
+assert.ok(paths.includes(lookalike),
+  'a vanished path with no separator after the repo name keeps its own row');
+assert.ok(paths.includes('/Users/someone/workspace/demo-repo'),
+  "another machine's path is not folded into this machine's repository");
+
 // load more must read the same union, not fall back to the main checkout
 const page = await service.getProjectSessionsPage('p-main', { limit: 2, offset: 0 });
-assert.deepEqual(page.sessions.map((s) => s.id), ['s-wt1', 's-main']);
+assert.deepEqual(page.sessions.map((s) => s.id), ['s-wt1', 's-gone']);
 const page2 = await service.getProjectSessionsPage('p-main', { limit: 2, offset: 2 });
-assert.deepEqual(page2.sessions.map((s) => s.id), ['s-storage'], 'the second page continues the union');
+assert.deepEqual(page2.sessions.map((s) => s.id), ['s-main', 's-storage'], 'the second page continues the union');
 assert.equal(page2.sessionMeta.hasMore, false);
 
 fs.rmSync(root, { recursive: true, force: true });

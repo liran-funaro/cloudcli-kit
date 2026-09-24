@@ -2299,6 +2299,7 @@ if 'KIT: worktrees coalesced' in s:
 
 IMPORT_ANCHOR = "import { projectsDb, sessionsDb } from '../../../modules/database/index.js';\n"
 HELPERS = IMPORT_ANCHOR + """import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 // KIT: worktrees coalesced under the repo they belong to -----------------------
 // A worktree is a checkout of the SAME repository, so one project per worktree
 // splits one piece of work across six rows that cannot see each other. These
@@ -2337,6 +2338,39 @@ function kitWorktreePaths(repoRoot) {
         .filter(Boolean);
 }
 
+/**
+ * The repository a VANISHED path most likely belonged to.
+ *
+ * A worktree removed properly leaves nothing to go on: git has forgotten it
+ * (`worktree list` no longer names it) and the branch its transcript recorded is
+ * usually deleted with it -- both checked on the one here, where
+ * `storage/drop-unused-index` exists in no repository any more. What
+ * survives is the path, and the convention that produced it: a worktree of
+ * `<repo>` is `<repo><separator><name>`. So an orphan is attributed to the
+ * longest repository path it extends, and to nothing when it extends none.
+ *
+ * This is an inference from naming, not evidence, so it is confined to paths
+ * that no longer exist: no live directory is ever reclassified by it, and a
+ * session whose directory is still there is grouped by git as before.
+ */
+function kitOrphanRepo(orphanPath, repoRoots) {
+    let best = null;
+    for (const root of repoRoots) {
+        if (!orphanPath.startsWith(root) || orphanPath.length === root.length) {
+            continue;
+        }
+        // A separator has to follow, or `acme-common` would claim
+        // `acme-commonwealth`.
+        if (!'.-_+/'.includes(orphanPath[root.length])) {
+            continue;
+        }
+        if (!best || root.length > best.length) {
+            best = root;
+        }
+    }
+    return best;
+}
+
 function kitWorktreeIndex(projectRows) {
     if (Date.now() - kitWtCache.at < KIT_WT_TTL_MS) {
         return kitWtCache;
@@ -2352,6 +2386,21 @@ function kitWorktreeIndex(projectRows) {
         if (!byRepo.has(repoRoot)) {
             byRepo.set(repoRoot, new Set(kitWorktreePaths(repoRoot)));
         }
+        byRepo.get(repoRoot).add(row.project_path);
+    }
+    // Deleted worktrees: git cannot place them, so the path is asked instead.
+    // Only repositories, never other worktrees, are candidates -- a worktree is
+    // not the parent of anything.
+    const repoRoots = [...byRepo.keys()];
+    for (const row of projectRows) {
+        if (repoOf.has(row.project_path) || existsSync(row.project_path)) {
+            continue;
+        }
+        const repoRoot = kitOrphanRepo(row.project_path, repoRoots);
+        if (!repoRoot) {
+            continue;
+        }
+        repoOf.set(row.project_path, repoRoot);
         byRepo.get(repoRoot).add(row.project_path);
     }
     kitWtCache = { at: Date.now(), byRepo, repoOf };
