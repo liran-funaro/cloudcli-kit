@@ -680,8 +680,12 @@ KIT_AUT_HELPERS = (
     # The armed set, polled the way the cost chip polls its report. The API needs
     # the app's own token, which lives in localStorage under "auth-token".
     'function kitAutTok(){try{return localStorage.getItem("auth-token")||""}catch{return ""}}\n'
+    # The clock is always drawn, faint when the session is not armed: a chip that
+    # renders nothing until it is armed can only be armed from the CLI, which
+    # defeats having it.
     'function kitAutDraw(_n){const _e=window.__kitAut&&window.__kitAut[_n.getAttribute("data-kit-aut")];'
-    '_n.textContent=_e?"\u23f1":"";'
+    '_n.textContent="\u23f1";'
+    '_n.style.opacity=_e?"1":"0.3";'
     '_n.title=_e?("autonomous"+(_e.until?" until "+new Date(_e.until).toLocaleString():"")'
     '+" \u00b7 "+(_e.nudges||0)+" turns \u00b7 click to stop")'
     ':"click to keep this session working while you are away"}\n'
