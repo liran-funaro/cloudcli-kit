@@ -1035,8 +1035,15 @@ on. Either sentinel disarms the session, as does a session that no longer exists
 
 **Slack is for information, not for turns.** The nudge says so in as many words — a milestone, a
 decision made on the user's behalf, something broken, the work finished — and explicitly rules out
-reporting that it was nudged, started, or is still working. The kit itself posts only when a
-session's state changes: done, blocked, over budget, gone.
+reporting that it was nudged, started, or is still working. How often to report is then the agent's
+judgement, which is the right place for it.
+
+What the *kit* posts is deterministic and therefore rationed: **one heartbeat a day per session** —
+turns run, and cycle spend since arming — because that is all a loop can state as fact, and a
+minute-by-minute version of it is noise. The clock starts at arming, so the first line lands a day
+in rather than a minute in. The one report that ignores the ration is the last one: a session
+stopping (done, blocked, over budget, gone) is news whenever it happens, and it carries the same two
+numbers.
 
 **Two guards, because nothing else bounds an unattended loop.** Never more than one nudge a minute
 per session, and a spend ceiling read from the Cost report's own json sidecar. The ceiling measures

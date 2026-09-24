@@ -3101,6 +3101,42 @@ function kitAutNudge(entry) {
             + ' own line. Either one ends autonomous mode, so do not write them otherwise.',
     ].join('\\n\\n');
 }
+const KIT_AUT_DAY_MS = Number(process.env.CLOUDCLI_AUTONOMY_REPORT_MS ?? 86_400_000);
+/** The two numbers the kit can state as fact, as report bullets. */
+function kitAutTally(entry, spend) {
+    const base = Number(entry.spendAtArm);
+    const since = spend !== null && spend !== undefined && Number.isFinite(base)
+        ? spend - base
+        : null;
+    if (since !== null) {
+        entry.spendSince = Number(since.toFixed(2));
+    }
+    return [`- turns run: ${entry.nudges ?? 0}`,
+        ...(since !== null ? [`- cycle spend since arming: $${since.toFixed(2)}`] : []),
+    ].join('\\n');
+}
+/**
+ * The kit's own report, at most one a day per session.
+ *
+ * What the kit can say by itself is a heartbeat -- still working, this many
+ * turns, this much spent -- and a heartbeat every minute is noise. Whatever is
+ * worth saying about the work, the agent says through the skill as often as it
+ * judges; this does not compete with that. The first pass after arming only
+ * starts the clock, so the first line lands a day in rather than a minute in.
+ */
+function kitAutHeartbeat(store, sessionId, entry, spend) {
+    const last = entry.reported ? new Date(entry.reported).getTime() : 0;
+    if (Number.isFinite(last) && last > 0 && Date.now() - last < KIT_AUT_DAY_MS) {
+        return false;
+    }
+    const first = !entry.reported;
+    entry.reported = new Date().toISOString();
+    if (first) {
+        return false;
+    }
+    kitAutSlack(`still working: ${sessionId.slice(0, 8)}`, kitAutTally(entry, spend));
+    return true;
+}
 function kitAutSlack(message, summary) {
     try {
         const child = kitSpawn('cloudcli-slack-report',
@@ -3113,7 +3149,7 @@ function kitAutSlack(message, summary) {
         // A report that cannot be sent is not a reason to keep nudging.
     }
 }
-function kitAutDisarm(store, sessionId, state, why) {
+function kitAutDisarm(store, sessionId, state, why, spend) {
     const entry = store[sessionId];
     if (!entry) {
         return;
@@ -3121,9 +3157,14 @@ function kitAutDisarm(store, sessionId, state, why) {
     entry.state = state;
     entry.ended = new Date().toISOString();
     entry.why = why;
+    // What it cost is the thing worth reading next to how it ended, so the
+    // report carries it whatever the reason -- not only when a ceiling fired.
+    // Cycle spend, so it is every key rather than this session; the sidecar has
+    // no per-session figure and inventing one would read as fact.
     console.log('[Autonomy] disarmed', { sessionId, state, why });
-    kitAutSlack(`session ${state}: ${why}`.slice(0, 120),
-        `- nudges sent: ${entry.nudges ?? 0}`);
+    // A stop is news whenever it happens, so this one does not wait for the daily
+    // slot -- and it is the last thing this session will say.
+    kitAutSlack(`session ${state}: ${why}`.slice(0, 120), kitAutTally(entry, spend));
 }
 /** One pass over the armed sessions. Exported so the kit's check can drive it. */
 export async function kitAutonomyPass(runtime) {
@@ -3139,7 +3180,7 @@ export async function kitAutonomyPass(runtime) {
         const entry = store[sessionId];
         const session = sessionsDb.getSessionById(sessionId);
         if (!session) {
-            kitAutDisarm(store, sessionId, 'gone', 'the session no longer exists');
+            kitAutDisarm(store, sessionId, 'gone', 'the session no longer exists', spend);
             changed = true;
             continue;
         }
@@ -3153,12 +3194,12 @@ export async function kitAutonomyPass(runtime) {
         }
         const said = kitAutLastSaid(session.jsonl_path ?? '');
         if (said.includes(KIT_AUT_DONE)) {
-            kitAutDisarm(store, sessionId, 'done', 'the agent reported the work finished');
+            kitAutDisarm(store, sessionId, 'done', 'the agent reported the work finished', spend);
             changed = true;
             continue;
         }
         if (said.includes(KIT_AUT_BLOCKED)) {
-            kitAutDisarm(store, sessionId, 'blocked', 'the agent reported it cannot continue');
+            kitAutDisarm(store, sessionId, 'blocked', 'the agent reported it cannot continue', spend);
             changed = true;
             continue;
         }
@@ -3167,7 +3208,7 @@ export async function kitAutonomyPass(runtime) {
         if (Number.isFinite(limit) && limit > 0 && spend !== null && Number.isFinite(base)
             && spend - base >= limit) {
             kitAutDisarm(store, sessionId, 'over budget',
-                `spend since arming reached $${(spend - base).toFixed(2)}`);
+                `spend since arming reached $${(spend - base).toFixed(2)}`, spend);
             changed = true;
             continue;
         }
@@ -3182,10 +3223,11 @@ export async function kitAutonomyPass(runtime) {
             entry.last = new Date().toISOString();
             nudged += 1;
             changed = true;
+            kitAutHeartbeat(store, sessionId, entry, spend);
             console.log('[Autonomy] nudged', { sessionId, nudges: entry.nudges });
         }
         else if (result.error && !result.error.includes('already in progress')) {
-            kitAutDisarm(store, sessionId, 'failed', result.error);
+            kitAutDisarm(store, sessionId, 'failed', result.error, spend);
             changed = true;
         }
     }
@@ -3235,11 +3277,13 @@ open(path, 'w').write(s)
 print('autonomy: applied')
 AUTPY
   then
-    if node --check "$AUT" >/dev/null 2>&1; then
+    # Say what node objected to: a bare "broke syntax" is a guess, and this
+    # check has already cost one debugging session.
+    if kit_err=$(node --check "$AUT" 2>&1); then
       rm -f "$AUT.prepatch"
     else
       mv "$AUT.prepatch" "$AUT"
-      echo "WARNING: the autonomy patch broke syntax, reverted" >&2
+      echo "WARNING: the autonomy patch broke syntax, reverted -- ${kit_err//$'\n'/ }" >&2
     fi
   else
     mv "$AUT.prepatch" "$AUT"

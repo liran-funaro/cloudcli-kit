@@ -130,7 +130,30 @@ write({ 's-work': armed({ nudge: 'carry on with the migration' }) });
 await kitAutonomyPass({});
 assert.equal(sent[0].content, 'carry on with the migration');
 
-// 6. nothing armed, and a corrupt file, are both quiet no-ops rather than throws.
+// 6. the kit's own reporting is a heartbeat, not a commentary: the first pass only
+//    starts the clock, and nothing else goes out until a day has passed.
+const posts = [];
+write({ 's-work': armed({ until: '2026-09-29T07:00:00Z', spendAtArm: 90 }) });
+await kitAutonomyPass({});
+store = read();
+assert.ok(store['s-work'].reported, 'arming starts the daily clock');
+const firstReport = store['s-work'].reported;
+store['s-work'].last = new Date(Date.now() - 10 * 60_000).toISOString();
+write(store);
+await kitAutonomyPass({});
+assert.equal(read()['s-work'].reported, firstReport,
+    'a second turn within the day must not report again');
+// A day old: the report goes out, and carries both numbers as facts.
+store = read();
+store['s-work'].reported = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+store['s-work'].last = new Date(Date.now() - 10 * 60_000).toISOString();
+write(store);
+await kitAutonomyPass({});
+store = read();
+assert.notEqual(store['s-work'].reported, firstReport, 'after a day, one report goes out');
+assert.equal(store['s-work'].spendSince, 10, 'and states the spend since arming (100 - 90)');
+
+// 7. nothing armed, and a corrupt file, are both quiet no-ops rather than throws.
 fs.writeFileSync(state, '{ this is not json');
 assert.equal(await kitAutonomyPass({}), 0, 'a corrupt state file must not throw');
 fs.writeFileSync(state, '{}');
