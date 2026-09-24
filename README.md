@@ -918,8 +918,10 @@ path on another machine — `/Users/…/acme-server` — is left alone rather th
 the local repository's row.
 
 **Which checkout a new session runs in** is then a question the row can no longer answer, so
-the composer asks it: a small select beside the token chip, listing the checkouts the server
-sent with the row, remembered per project. Choosing one sets `cwd` on the next send, which is
+the composer asks it: a select stacked under the model picker, where the rest of what a turn
+will use is chosen, listing the checkouts the server sent with the row and remembered per
+project. It appears only while a **new** session is being started — an existing session already
+runs somewhere, and a select cannot move it. Choosing one sets `cwd` on the next send, which is
 all the server needs — `projectPath` for a session comes from the transcript's own `cwd`
 (`claude-session-synchronizer.provider.ts`), so a session started in `.wt-2` records itself
 there and comes back badged like every other worktree session. A repository with one checkout

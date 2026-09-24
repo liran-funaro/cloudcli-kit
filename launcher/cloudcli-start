@@ -699,10 +699,13 @@ else:
 
 # (14) Which checkout a NEW session runs in. With every worktree folded into one
 # row (patch 15), the row no longer says where a new session would run, so the
-# composer asks: a small select beside the token chip, listing the checkouts the
-# server sent with the row. Choosing one sets `cwd` on the next send, which is
-# all the server needs -- the session records itself under the transcript's own
-# cwd, so it comes back badged like every other worktree session.
+# composer asks -- under the model picker, where the rest of what a new turn will
+# use is chosen, and only while a new session is being started: an existing
+# session already runs somewhere and cannot be moved by a select.
+#
+# Choosing one sets `cwd` on the next send, which is all the server needs: the
+# session records itself under the transcript's own cwd, so it comes back badged
+# like every other worktree session.
 #
 # No React state: the value is the app's own prop, the choice lives in
 # localStorage per project, and the send reads it off a global the render set.
@@ -725,28 +728,34 @@ KIT_WT_HELPERS = (
 FOOT = re.compile(r'function (\w+)\(\{pendingPermissionRequests:[^)]{0,400}?tokenBudget:')
 SIG = re.compile(r'tokenBudget:(\w+),onShowTokenUsage:(\w+),')
 CALL = 'onShowTokenUsage:TR,'
-CHIP = re.compile(r'(\w+)\.jsx\((\w+),\{usage:(\w+),onClick:(\w+)\}\),')
+MODEL = re.compile(r'(\w+)\.jsx\((\w+),\{effort:(\w+),effortOptions:(\w+),'
+                   r'onSelectEffort:(\w+),model:(\w+),modelOptions:(\w+),'
+                   r'onSelectModel:(\w+),modelsLoading:(\w+)\}\)')
 OPTS = re.compile(r'return\{model:(\w+),effort:(\w+),permissionMode:(\w+)\((\w+),(\w+)\),'
                   r'toolsSettings:(\w+),')
 counts = [len(FOOT.findall(s)), len(SIG.findall(s)), s.count(CALL),
-          len(CHIP.findall(s)), len(OPTS.findall(s))]
+          len(MODEL.findall(s)), len(OPTS.findall(s))]
 if 'kitWtChoose' in s:
     missing.append('worktree picker (already marked)')
 elif counts == [1, 2, 1, 1, 1]:
     s = FOOT.sub(lambda m: KIT_WT_HELPERS + m.group(0), s, count=1)
     # the prop, on the signature and at the one call site that renders the footer
-    s = SIG.sub(lambda m: 'tokenBudget:%s,_kitProject:_kitProj,onShowTokenUsage:%s,'
-                % (m.group(1), m.group(2)), s, count=1)
-    s = s.replace(CALL, '_kitProject:t,' + CALL, 1)
-    s = CHIP.sub(lambda m: '(_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
-                 '?%s.jsx("select",{className:"h-8 max-w-[8rem] truncate rounded-lg border '
-                 'border-border/70 bg-background/70 px-1.5 text-xs text-muted-foreground",'
-                 'title:"Which checkout a new session runs in",'
-                 'defaultValue:kitWtValue(_kitProj),'
-                 'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
-                 'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
-                 '{value:_w.path,children:_w.label||"main"},_w.path))}):null),%s'
-                 % (m.group(1), m.group(1), m.group(0)), s, count=1)
+    s = SIG.sub(lambda m: 'tokenBudget:%s,_kitProject:_kitProj,_kitIsNew:_kitNew,'
+                'onShowTokenUsage:%s,' % (m.group(1), m.group(2)), s, count=1)
+    # `r` is selectedSession at that call site: no session means a new one.
+    s = s.replace(CALL, '_kitProject:t,_kitIsNew:!r,' + CALL, 1)
+    s = MODEL.sub(lambda m: '%s.jsxs("div",{className:"flex flex-col items-stretch '
+                  'gap-1",children:[%s,'
+                  '_kitNew&&_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
+                  '?%s.jsx("select",{className:"h-7 w-full max-w-[11rem] truncate rounded-lg '
+                  'border border-border/70 bg-background/70 px-1.5 text-xs '
+                  'text-muted-foreground",'
+                  'title:"Which checkout this session will run in",'
+                  'defaultValue:kitWtValue(_kitProj),'
+                  'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
+                  'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
+                  '{value:_w.path,children:_w.label||"main"},_w.path))}):null]})'
+                  % (m.group(1), m.group(0), m.group(1), m.group(1)), s, count=1)
     s = OPTS.sub(lambda m: 'return{model:%s,effort:%s,permissionMode:%s(%s,%s),'
                  'toolsSettings:%s,cwd:window.__kitWtCwd'
                  '&&window.__kitWtCwd.project===((e&&e.projectId)||"")'
