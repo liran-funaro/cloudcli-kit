@@ -724,17 +724,29 @@ KIT_WT_HELPERS = (
     'function kitWtChoose(project,value){'
     'window.__kitWtCwd={project:(project&&project.projectId)||"",path:value};'
     'try{localStorage.setItem(kitWtKey(project),value)}catch{}}\n'
-    # Two columns in a native <select>: the option text is all there is, so the
-    # label is padded to the widest one with non-breaking spaces (a plain run of
-    # spaces collapses) and a box-drawing bar is drawn between the columns. Only
-    # lines up under a monospace face, which the select asks for.
-    'const KIT_WT_FONT={fontFamily:'
-    '"ui-monospace,SFMono-Regular,Menlo,Consolas,\\"Liberation Mono\\",monospace"};\n'
-    'function kitWtText(project,w){'
-    'const labels=((project&&project._kitWorktrees)||[]).map(x=>x.label||"main");'
-    'const label=w.label||"main";'
-    'const pad="\\u00a0".repeat(Math.max(0,Math.max(0,...labels.map(l=>l.length))-label.length));'
-    'return label+pad+"\\u00a0\\u2502\\u00a0"+(w.branch||"")}\n'
+    # Two columns, laid out rather than spelled out. A native <select> could not
+    # do this: its open list is the browser's own widget, which ignores the font
+    # the control asks for on at least one platform here, and padded text in a
+    # proportional face lines up with nothing. So the list is ordinary elements
+    # -- <details> for the open/closed state, one fixed-width span per column --
+    # and the columns align in whatever font the browser feels like using.
+    'function kitWtSummary(w){'
+    'return (w.label||"main")+(w.branch?" \\u00b7 "+w.branch:"")}\n'
+    'function kitWtNow(project){'
+    'const ws=(project&&project._kitWorktrees)||[];const path=kitWtValue(project);'
+    'return kitWtSummary(ws.find(x=>x.path===path)||ws[0]||{})}\n'
+    # No React state: the summary is the one thing that has to change, so the
+    # click writes it and shuts the disclosure. Everything else already lives in
+    # localStorage and on the global the send reads.
+    'function kitWtPick(project,w,el){kitWtChoose(project,w.path);'
+    'const d=el.closest("details");if(!d)return;'
+    'const now=d.querySelector(".kit-wt-now");if(now)now.textContent=kitWtSummary(w);'
+    'd.open=false}\n'
+    # <details> does not close when you click elsewhere. One listener, once.
+    'if(typeof document!=="undefined"&&!window.__kitWtClose){window.__kitWtClose=1;'
+    'document.addEventListener("click",function(_e){'
+    'document.querySelectorAll("details.kit-wt[open]").forEach(function(_d){'
+    'if(!_d.contains(_e.target))_d.open=false})})}\n'
 )
 # The empty state's own signature, the pane's render of it, the line that follows
 # the model card, and the options a send is built from.
@@ -760,28 +772,36 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
                       'currentSessionId:%s,provider:%s,setProvider:%s,textareaRef:'
                       % (m.group(1), m.group(2), PANE_PROJECT[0], m.group(3), m.group(4),
                          m.group(5), m.group(6)), s, count=1)
-    s = READY.sub(lambda m: '_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
-                  '?%s.jsxs("label",{className:"mt-4 flex items-center justify-center gap-2 '
-                  'text-[11px] text-muted-foreground",children:['
-                  '%s.jsx("span",{children:"worktree"}),'
-                  '%s.jsx("select",{className:"h-8 max-w-[32rem] truncate rounded-lg border '
-                  'border-border/60 bg-background px-2 font-mono text-[12px] text-foreground",'
-                  'defaultValue:kitWtValue(_kitProj),'
-                  'onChange:_e=>kitWtChoose(_kitProj,_e.target.value),'
-                  'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsx("option",'
-                  # The popup list is the browser's own widget and it does not
-                  # reliably inherit the select's font, which leaves the padding
-                  # aligned against a proportional face -- i.e. not aligned. Each
-                  # option carries the face itself, inline, where nothing can
-                  # override it.
-                  '{value:_w.path,title:_w.path,style:KIT_WT_FONT,'
-                  # The branch is what tells two checkouts apart when the
-                  # directory names do not, so it rides along in a second column
-                  # -- empty where git reports none, the bar drawn regardless so
-                  # the column reads as one.
-                  'children:kitWtText(_kitProj,_w)},'
-                  '_w.path))})]}):null,%s'
-                  % (m.group(1), m.group(1), m.group(1), m.group(1), m.group(0)), s, count=1)
+    def _wt_picker(m):
+        j = m.group(1)
+        return (
+            '_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
+            '?%s.jsxs("details",{className:"kit-wt relative mx-auto mt-4 w-fit '
+            'text-[12px] text-muted-foreground",children:['
+            '%s.jsxs("summary",{className:"flex cursor-pointer list-none items-center gap-2 '
+            'rounded-lg border border-border/60 bg-background px-2 py-1 hover:bg-accent/40 '
+            '[&::-webkit-details-marker]:hidden",children:['
+            '%s.jsx("span",{children:"worktree"}),'
+            '%s.jsx("span",{className:"kit-wt-now font-mono text-foreground",'
+            'children:kitWtNow(_kitProj)}),'
+            '%s.jsx("span",{"aria-hidden":true,children:"\u2304"})]}),'
+            '%s.jsx("div",{className:"absolute left-1/2 z-50 mt-1 max-h-72 -translate-x-1/2 '
+            'overflow-auto rounded-lg border border-border/60 bg-background py-1 shadow-lg",'
+            'children:(_kitProj._kitWorktrees||[]).map(_w=>%s.jsxs("button",'
+            '{type:"button",title:_w.path,'
+            'onClick:_e=>kitWtPick(_kitProj,_w,_e.currentTarget),'
+            'className:"flex w-full items-center whitespace-nowrap px-2 py-1 text-left '
+            'hover:bg-accent",children:['
+            # The label column is wide enough for the longest of them and does
+            # not shrink, which is the whole trick: the divider that follows is
+            # therefore at the same offset on every row.
+            '%s.jsx("span",{className:"min-w-[10rem] shrink-0 font-mono text-foreground",'
+            'children:_w.label||"main"}),'
+            '%s.jsx("span",{className:"border-l border-border/60 pl-2 font-mono",'
+            'children:_w.branch||""})]},_w.path))})]}):null,%s'
+            % (j, j, j, j, j, j, j, j, j, m.group(0)))
+
+    s = READY.sub(_wt_picker, s, count=1)
     s = OPTS.sub(lambda m: 'return{model:%s,effort:%s,permissionMode:%s(%s,%s),'
                  'toolsSettings:%s,cwd:window.__kitWtCwd'
                  '&&window.__kitWtCwd.project===((e&&e.projectId)||"")'

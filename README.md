@@ -932,26 +932,33 @@ Each option names the checkout and **the branch it has out**, which is what tell
 apart when the directory names do not:
 
 ```
-worktree [ main      │ release/2.x           ⌄ ]
-           .signing  │ feat/faster-signing
-           .storage  │ design/storage
-           .wt-2     │ detached
-           .archive  │
+worktree [ main · release/2.x ⌄ ]
+           ┌──────────┬────────────────────────┐
+           │ main     │ release/2.x            │
+           │ .signing │ feat/faster-signing    │
+           │ .storage │ design/storage         │
+           │ .wt-2    │ detached               │
+           │ .archive │                        │
+           └──────────┴────────────────────────┘
 ```
 
 `git worktree list --porcelain` reports the branch in the same call that reports the paths, so
 this costs a few lines of parsing and no extra process; `detached` is reported as such, and a
 checkout git no longer lists — a deleted worktree — carries no branch at all.
 
-A native `<select>` has nothing but option text to lay out with, so the label is padded to the
-widest one with non-breaking spaces — a plain run of spaces collapses — and a bar is drawn
-between the columns, which only lines up in a monospace face. The bar is drawn on a branchless row
-too, so the column reads as one.
+The columns are **laid out, not spelled out**, and that took two false starts worth recording. A
+native `<select>` has nothing but option text to work with, so the first attempt padded each label
+to the widest one with non-breaking spaces and drew a bar between the columns — which aligns only
+in a monospace face. `font-mono` on the select styles the closed control and nothing else: the open
+list is the browser's own widget. Setting the face inline on every `<option>` did not reach it
+either, which is the platform's answer and not a bug to keep working around.
 
-The face has to be set **on each option, inline**, not just on the select: the open list is the
-browser's own widget and does not reliably inherit from the select, so a Tailwind class there
-styles the closed control and leaves the list proportional — padding aligned against a font that
-cannot align.
+So the list is ordinary elements — `<details>` for the open/closed state, one non-shrinking span
+per column, a `border-l` divider on the second — and the columns line up in whatever font the
+browser chooses, monospace or not. No React state: the choice already lives in localStorage and on
+the global the send reads, so the click writes the summary text, shuts the disclosure, and that is
+the whole widget. One document listener closes it when you click elsewhere, which `<details>` does
+not do by itself.
 
 The list travels with the project row rather than being fetched, because the client cannot
 reach `/api/worktrees` without the app's own auth helper — and it includes worktrees that were

@@ -153,33 +153,38 @@ out = run([
 ]);
 assert.deepEqual(out, [{ fellThrough: 'text', content: 'hello' }]);
 
-// 8. the worktree picker's two columns, lifted from the same bundle: every option
-//    must put its bar at the same offset, whatever the labels are.
-const wtStart = src.indexOf('function kitWtText(project,w){');
-assert.ok(wtStart > 0, 'kitWtText not found in the bundle');
-const wtEnd = src.indexOf('\n', wtStart);
-const kitWtText = new Function('return ' + src.slice(wtStart, wtEnd > 0 ? wtEnd : undefined)
-  + ';kitWtText')();
-const project = { _kitWorktrees: [
-  { label: '', branch: 'release/2.x' },              // the main checkout
-  { label: '.signing', branch: 'feat/faster-signing' },
-  { label: '.storage', branch: null },               // git reports no branch
-  { label: '.a', branch: 'detached' },               // the shortest label
-] };
-const lines = project._kitWorktrees.map((w) => kitWtText(project, w));
-const bars = lines.map((l) => l.indexOf('\u2502'));
-assert.equal(new Set(bars).size, 1, 'bars must line up: ' + JSON.stringify(lines));
-assert.ok(bars[0] >= '.signing'.length, 'labels must pad to the widest one');
-assert.ok(lines[2].endsWith('\u00a0'), 'a branchless row still draws its bar');
-assert.ok(!lines.some((l) => / {2}/.test(l)), 'padding must be non-breaking, not spaces');
+// 8. the worktree picker, lifted from the same bundle: the columns are laid out,
+//    so what has to hold is the structure -- a label column that cannot shrink,
+//    a divider on the branch column, and no dependence on any font.
+const picker = src.slice(src.indexOf('_kitProj&&(_kitProj._kitWorktrees||[]).length>1'),
+  src.indexOf('_w.path))})]}):null') + 20);
+assert.ok(picker.length > 200 && picker.length < 4000, 'picker markup not found in the bundle');
+for (const needed of [
+  'jsxs("details"', 'kit-wt relative',          // open/closed with no React state
+  'min-w-[10rem] shrink-0',                     // the label column, fixed width
+  'border-l border-border/60 pl-2',             // the divider, on every row
+  'onClick:_e=>kitWtPick(', 'title:_w.path',
+]) {
+  assert.ok(picker.includes(needed), `picker must contain ${needed}`);
+}
+assert.ok(!picker.includes('"option"') && !picker.includes('u00a0'),
+  'no native options and no padded text: alignment must not depend on a font');
 
-//    ... and the face the options are drawn in has to travel with them, since the
-//    popup is the browser's own widget and does not reliably inherit the select's.
-const fontStart = src.indexOf('const KIT_WT_FONT=');
-assert.ok(fontStart > 0, 'KIT_WT_FONT not found in the bundle');
-const font = new Function(src.slice(fontStart, src.indexOf('\n', fontStart)) + ';return KIT_WT_FONT')();
-assert.match(font.fontFamily, /monospace$/, 'options must fall back to monospace');
-assert.ok(src.includes('title:_w.path,style:KIT_WT_FONT'),
-  'every option must carry the face inline');
+// The click handler updates the summary and closes the disclosure, since nothing
+// else will: run the injected helpers against a fake row and check both.
+const hStart = src.indexOf('function kitWtKey(project){');
+const hEnd = src.indexOf('d.open=false}', hStart);
+assert.ok(hStart > 0 && hEnd > hStart, 'picker helpers not found in the bundle');
+const helpers = src.slice(hStart, hEnd + 'd.open=false}'.length);
+const win = {};
+const kitWtPick = new Function('window', 'localStorage',
+  helpers + ';return kitWtPick')(win, { getItem: () => null, setItem: () => {} });
+const now = { textContent: '' };
+const details = { open: true, querySelector: () => now };
+kitWtPick({ projectId: 'p' }, { label: '.storage', branch: 'design/storage', path: '/w/r.storage' },
+  { closest: () => details });
+assert.equal(now.textContent, '.storage \u00b7 design/storage', 'the summary must follow the pick');
+assert.equal(details.open, false, 'picking must close the list');
+assert.equal(win.__kitWtCwd.path, '/w/r.storage', 'the send must see the choice');
 
 console.log('all checks passed');
