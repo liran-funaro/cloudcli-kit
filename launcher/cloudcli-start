@@ -1093,6 +1093,51 @@ if links:
         missing.append('token chip dash (%s matches)'
                        % '/'.join(str(c) for c in counts))
 
+# (13) What a Bash command did to the files it touched. In auto and bypass
+# modes the CLI snapshots the repository around every Bash call and records the
+# change as `toolUseResult.bashEditDiff` -- files, and hunks of unified-diff
+# lines -- which is what the terminal draws under the command. The app's Bash
+# row draws the command and its output and nothing else, so a file an agent
+# rewrote with sed or a heredoc left no trace in the chat at all.
+#
+# Drawn below the command, open, one disclosure per file, from the same class
+# strings upstream's own Edit diff uses -- so every class is one the shipped CSS
+# already compiled. The CLI already caps the payload (it drops an oversized file
+# and reports it in moreFiles), so nothing here has to.
+KIT_BASH_DIFF = r"""function kitBashDiff(J,d){
+if(!d||typeof d!=="object"||d.skipped||!Array.isArray(d.files)||!d.files.length)return null;
+const G="w-6 flex-shrink-0 select-none text-center",T="flex-1 whitespace-pre-wrap px-2";
+const kind=c=>c==="-"?[G+" bg-red-50 text-red-400 dark:bg-red-950/30 dark:text-red-500",T+" bg-red-50/50 text-red-800 dark:bg-red-950/20 dark:text-red-200"]
+:c==="+"?[G+" bg-green-50 text-green-400 dark:bg-green-950/30 dark:text-green-500",T+" bg-green-50/50 text-green-800 dark:bg-green-950/20 dark:text-green-200"]
+:[G+" text-muted-foreground",T+" text-muted-foreground"];
+const files=d.files.map((f,i)=>{const name=String(f&&f.filePath||"");const rows=[];
+(Array.isArray(f&&f.hunks)?f.hunks:[]).forEach((h,k)=>{
+if(k>0)rows.push(J.jsx("div",{className:"select-none px-2 text-muted-foreground",children:"⋯"},"s"+k));
+(Array.isArray(h&&h.lines)?h.lines:[]).forEach((ln,j)=>{const t=String(ln),c=t.charAt(0),[g,x]=kind(c);
+rows.push(J.jsxs("div",{className:"flex",children:[J.jsx("span",{className:g,children:c==="-"||c==="+"?c:""}),J.jsx("span",{className:x,children:t.slice(1)})]},k+"-"+j))})});
+return J.jsxs("details",{open:!0,className:"overflow-hidden rounded border border-gray-200/60 dark:border-gray-700/50",children:[
+J.jsxs("summary",{className:"flex items-center justify-between border-b border-gray-200/60 bg-gray-50/80 px-2.5 py-1 dark:border-gray-700/50 dark:bg-gray-800/40",style:{listStyle:"none",cursor:"pointer"},children:[
+J.jsx("span",{className:"truncate font-mono text-[11px] text-gray-600 dark:text-gray-400",children:name}),
+J.jsx("span",{className:"rounded px-1.5 py-px text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0",children:f&&f.created?"New":f&&f.deleted?"Deleted":"Bash edit"})]}),
+rows.length?J.jsx("div",{className:"font-mono text-[11px] leading-[18px]",children:rows}):null]},name+i)});
+const more=(d.moreFiles|0)>0?J.jsx("div",{className:"px-2 font-mono text-[11px] text-muted-foreground",children:"+"+d.moreFiles+" more file"+(d.moreFiles===1?"":"s")+" changed"},"more"):null;
+return J.jsxs("div",{className:"mt-1 space-y-1","data-kit-bash-diff":"1",children:[...files,more]})}
+"""
+BASH_ROW = re.compile(r'(if\(\w+==="Bash"&&\w+==="input"\)\{.*?)return (\w+)\.jsx\((\w+),'
+                      r'(\{command:\w+,description:\w+,output:\w+,isError:!!(\w+)\?\.isError,'
+                      r'status:[^}]*?defaultOpen:!1\})\)\}')
+TOOL_ROW = re.compile(r'const \w+=\w+\.memo\(\(\{toolName:\w+,toolInput:\w+,toolResult:\w+,')
+counts = (len(BASH_ROW.findall(s)), len(TOOL_ROW.findall(s)))
+if counts == (1, 1):
+    s = TOOL_ROW.sub(lambda m: KIT_BASH_DIFF + m.group(0), s, count=1)
+    s = BASH_ROW.sub(lambda m: '%sreturn %s.jsxs(%s.Fragment,{children:[%s.jsx(%s,%s),'
+                     'kitBashDiff(%s,%s?.toolUseResult?.bashEditDiff)]})}'
+                     % (m.group(1), m.group(2), m.group(2), m.group(2), m.group(3),
+                        m.group(4), m.group(2), m.group(5)), s, count=1)
+    applied.append('bash diffs')
+else:
+    missing.append('bash diffs (%s matches)' % '/'.join(str(c) for c in counts))
+
 open(out, 'w').write(s)
 for m in missing:
     print('  MISSING: %s -- upstream moved it' % m, file=sys.stderr)
@@ -2415,6 +2460,20 @@ if 'compact_boundary' in s:
 else:
     apply('compaction', 'KIT: compaction', [(OLD, NEW)])
 
+# A live turn's tool results arrive from the SDK, which spells the structured
+# result `tool_use_result`; the transcript on disk spells it `toolUseResult`, and
+# this branch reads only that. So a live tool result reached the browser without
+# its structured half -- every Bash diff the CLI computes among it -- and only
+# came back once the session was reloaded from disk. Read both spellings.
+# The same line recurs in the history branch, which reads the disk and already
+# gets the camelCase spelling, so the anchor takes the line above it as well.
+TR_OLD = ("                            isError: Boolean(part.is_error),\n"
+          "                            toolUseResult: raw.toolUseResult,\n")
+TR_NEW = ("                            isError: Boolean(part.is_error),\n"
+          "                            // KIT: live tool results -- the SDK frame says tool_use_result\n"
+          "                            toolUseResult: raw.toolUseResult ?? raw.tool_use_result,\n")
+apply('live tool results', 'KIT: live tool results', [(TR_OLD, TR_NEW)])
+
 if applied:
     open(path, 'w').write(s)
 for m in missing:
@@ -2432,7 +2491,7 @@ PY
       rm -f "$CSP.prepatch"
     else
       mv "$CSP.prepatch" "$CSP"
-      echo "WARNING: the compaction patch broke syntax, reverted" >&2
+      echo "WARNING: the sessions-provider patch broke syntax, reverted" >&2
     fi
   else
     mv "$CSP.prepatch" "$CSP"

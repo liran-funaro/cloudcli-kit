@@ -1106,6 +1106,32 @@ ceiling fires, a vanished session disarms, the minimum gap holds off a second nu
 the next through, a session's own nudge text wins, the turn carries the mode it was armed with and the
 allow-list from preferences, and a corrupt state file is a no-op rather than a crash.
 
+## What a Bash command changed
+
+In `auto` and `bypassPermissions` modes the CLI snapshots the repository around every Bash call
+and records what the command did to the files it touched — the same unified hunks an Edit
+carries — as `toolUseResult.bashEditDiff`. That is the diff the terminal draws under a Bash
+command, above *Allowed by auto mode classifier*. The app's Bash row drew the command and its
+output and nothing else, so a file an agent rewrote with `sed` or a heredoc left no trace in the
+chat at all — which, with auto mode steering file edits through Bash, is most of them.
+
+Two halves, because two things were missing:
+
+- **The row.** Below the command, open by default, one disclosure per file, with the sign in a
+  red/green gutter, hunks separated, and a count of any files the CLI left out. Every class is
+  one upstream's own Edit diff already uses, so the shipped CSS has compiled all of them.
+- **The live turn.** The history loader reads the transcript, which spells the field
+  `toolUseResult`; a live turn's result comes from the SDK stream, which spells it
+  `tool_use_result`, and the normalizer read only the first. So a live result reached the
+  browser without its structured half — the diff among it — until the session was reloaded
+  from disk. The normalizer reads both now. This one is a server module and lands on restart.
+
+When the CLI computes none: outside `auto`/`bypassPermissions` unless `bashEditDiffEnabled`
+(settings) or `CLAUDE_CODE_BASH_EDIT_DIFF` (env) turns it on. No diff recorded, no row drawn.
+
+`node launcher/bash-diff-check.mjs <patched ide-*.js> <package dir>` renders the shipped helper
+through a fake JSX runtime and checks every class against the shipped stylesheet.
+
 ## The model alias, pinned
 
 ```bash
