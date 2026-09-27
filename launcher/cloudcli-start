@@ -1192,7 +1192,7 @@ MP="$PKG/dist-server/server/modules/providers/list/claude/claude-models.provider
 if [[ -f $MP ]]; then
   cp "$MP" "$MP.prepatch"
   if python3 - "$MP" "$DROP_MODELS" <<'PY'
-import re, sys
+import os, re, sys
 
 path, drop = sys.argv[1], sys.argv[2].split()
 s = open(path).read()
@@ -1200,16 +1200,44 @@ s = open(path).read()
 # Keyed by the option's own value, so an option upstream adds keeps whatever
 # description upstream gave it until it is named here.
 DESC = {
-    'default':    'Whatever this deployment recommends -- the latest Opus, usually. $5/$25 per Mtok.',
-    'best':       'Fable 5 where it is served, otherwise the latest Opus. $10/$50 or $5/$25 per Mtok.',
     'fable':      'Fable 5, 1M context. The most capable model. $10/$50 per Mtok.',
-    'opus':       'Opus 5, 1M context. Best for everyday, complex tasks. $5/$25 per Mtok.',
-    'opus[1m]':   'Opus 5, 1M context pinned -- the same price as Opus. $5/$25 per Mtok.',
-    'opusplan':   'Opus 5 to plan, Sonnet 5 to execute. $5/$25 then $3/$15 per Mtok.',
     'sonnet':     'Sonnet 5, 1M context. Efficient for routine tasks. $3/$15 per Mtok.',
     'sonnet[1m]': 'Sonnet 5, 1M context pinned -- the same price as Sonnet. $3/$15 per Mtok.',
     'haiku':      'Haiku 4.5, 200K context. Fastest for quick answers. $1/$5 per Mtok.',
 }
+
+# The opus rows named a version by hand, and a hand-written version is exactly
+# what went stale: the pin sent claude-opus-5-5 while every row still read
+# "Opus 5", so the menu said one model and the turn ran another. These rows are
+# generated from the pin instead, so the text cannot disagree with what runs --
+# and they carry no price, since a price is one more thing that goes stale on a
+# model this file has never heard of.
+PIN = os.environ.get('CLOUDCLI_MODEL_PIN') or 'claude-opus-5'
+
+
+def display(model_id):
+    """claude-opus-5-5 -> Opus 5.5; unknown shapes come back unchanged."""
+    parts = model_id.removeprefix('claude-').split('-')
+    if len(parts) < 2 or not parts[1].isdigit():
+        return model_id
+    return '%s %s' % (parts[0].capitalize(), '.'.join(parts[1:]))
+
+
+if PIN != 'none':
+    name = display(PIN)
+    DESC.update({
+        'default':  'Runs as %s (%s) -- pinned by this deployment, not the CLI default.' % (name, PIN),
+        'best':     'Runs as %s (%s) -- pinned by this deployment, not the CLI default.' % (name, PIN),
+        'opus':     'Runs as %s (%s). Best for everyday, complex tasks.' % (name, PIN),
+        'opus[1m]': 'Runs as %s (%s[1m]) -- 1M context pinned.' % (name, PIN),
+    })
+else:
+    DESC.update({
+        'default':  'Whatever the CLI resolves its default to, which moves on CLI updates.',
+        'best':     'Fable 5 where it is served, otherwise whatever the CLI calls the latest Opus.',
+        'opus':     'The CLI\'s current Opus -- which version that is moves on CLI updates.',
+        'opus[1m]': 'The CLI\'s current Opus, 1M context pinned.',
+    })
 FIELD = re.compile(r"description: '[^']*'")
 
 
@@ -1267,6 +1295,7 @@ if priced:
     report.append('described %d' % len(priced))
 if skipped:
     report.append('no description field: ' + ', '.join(skipped))
+report.append('aliases run as %s' % (PIN if PIN != 'none' else "the CLI's own default"))
 print('models: %s' % ('; '.join(report) or 'nothing to do'))
 PY
   then

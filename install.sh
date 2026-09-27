@@ -9,6 +9,7 @@
 #   ~/bin/cloudcli-cost                writes the LiteLLM spend report
 #   ~/bin/cloudcli-slack-report        posts a report to a Slack workflow webhook
 #   ~/bin/cloudcli-autonomous          arms a session to keep working unattended
+#   ~/bin/cloudcli-model-check         says whether the model names still agree
 #   ~/.claude/skills/reporting-to-slack  teaches every Claude Code session to use it
 #   ~/.claude-code-ui/plugins/cost/    the tab that shows it
 #
@@ -145,6 +146,8 @@ if [[ $SLACK == 1 ]]; then
   cp -f "$REPO/notify/cloudcli-slack-report" "$BIN/cloudcli-slack-report"
   cp -f "$REPO/bin/cloudcli-autonomous" "$BIN/cloudcli-autonomous"
   chmod +x "$BIN/cloudcli-autonomous"
+  cp -f "$REPO/bin/cloudcli-model-check" "$BIN/cloudcli-model-check"
+  chmod +x "$BIN/cloudcli-model-check"
   chmod +x "$BIN/cloudcli-slack-report"
   echo "  installed $BIN/cloudcli-slack-report"
   if [[ -z ${SLACK_REPORT_URL:-} ]]; then

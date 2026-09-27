@@ -1150,9 +1150,37 @@ to 1M. `CLAUDE_CLI_PATH` (which the app already honours, `claude-runtime.provide
 points it at the installed CLI, whose catalog knows the model and its window. Verified through
 the gateway before and after: `models billed: ['claude-opus-5-5[1m]']`.
 
-The app's own menu is a separate list and still labels `opus[1m]` as "Opus 5, 1M context
-pinned", which the pin now makes untrue. The row still resolves to whatever the pin names; only
-the sentence is stale.
+The menu used to state the version by hand — the kit's own table said "Opus 5, 1M context
+pinned" while the pin was sending 5.5 — so the four pinned rows are **generated from the pin**
+now and cannot disagree with what runs:
+
+```
+Default (recommended)   Runs as Opus 5.5 (claude-opus-5-5) -- pinned by this deployment, not the CLI default.
+Opus                    Runs as Opus 5.5 (claude-opus-5-5). Best for everyday, complex tasks.
+Opus (1M context)       Runs as Opus 5.5 (claude-opus-5-5[1m]) -- 1M context pinned.
+```
+
+They carry no price, because a price is one more hand-written fact that goes stale on a model
+this file has never heard of. `CLOUDCLI_MODEL_PIN=none` swaps them for wording that promises
+only what it can keep: whatever the CLI resolves, which moves on CLI updates. The startup line
+names the target too — `models: described 6; aliases run as claude-opus-5-5`.
+
+That covers the menu lying. The other half is the four places that name a version drifting
+apart, which is silent by nature — a turn just runs a model nobody picked:
+
+```bash
+cloudcli-model-check --gateway
+#   web sessions (CLOUDCLI_MODEL_PIN)  claude-opus-5-5
+#   the CLI's own `opus` alias         claude-opus-5-5
+#   terminal sessions (settings.json)  claude-opus-5-5[1m]
+#   newest Opus the gateway serves     aws/claude-opus-5-5
+#
+# Agreed: every source names the same Opus version.
+```
+
+It exits 1 when they disagree, naming the newest version among them, and again when the gateway
+starts serving something newer than the pin — which is the moment to move it, and the moment
+this whole section was written about. `--self-check` covers the version comparison.
 
 Terminal sessions do not go through the server, so `~/.claude/settings.json` decides there. Two
 picker rows sit one digit apart — **"Opus 5 (1M context)"** writes the explicit

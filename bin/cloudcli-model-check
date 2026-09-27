@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Say whether the four places that name an Opus version still agree.
+
+They drift apart on their own: a CLI update moves what `opus` resolves to, a
+gateway gains a model months later, and every model name written down by hand
+keeps pointing at the version that was current when it was typed. Nothing
+fails loudly when they disagree -- the turn just runs a model you did not
+pick, which is how a week of sessions went to Opus 5 while the pin, the menu
+and the gateway had all moved on.
+
+  cloudcli-model-check              # the three local sources
+  cloudcli-model-check --gateway    # also ask the proxy what it serves
+  cloudcli-model-check --self-check # the comparison logic only
+
+Exit 1 when they disagree, so a cron line or a launcher can act on it.
+"""
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+SETTINGS = pathlib.Path.home() / '.claude' / 'settings.json'
+
+
+def version(model_id):
+    """The comparable version of a model id: claude-opus-5-5[1m] -> (5, 5)."""
+    core = model_id.removesuffix('[1m]').removeprefix('claude-')
+    parts = [p for p in core.split('-')[1:] if p.isdigit()]
+    return tuple(int(p) for p in parts) or (0,)
+
+
+def family(model_id):
+    core = model_id.removesuffix('[1m]').removeprefix('claude-')
+    return core.split('-')[0]
+
+
+def newest(ids, want='opus'):
+    """The highest-versioned id of one family, ignoring any provider prefix."""
+    same = [i for i in ids if family(i.split('/')[-1]) == want]
+    return max(same, key=lambda i: version(i.split('/')[-1]), default=None)
+
+
+def unit_pin():
+    """CLOUDCLI_MODEL_PIN as the service will see it."""
+    if os.environ.get('CLOUDCLI_MODEL_PIN'):
+        return os.environ['CLOUDCLI_MODEL_PIN']
+    try:
+        out = subprocess.run(['systemctl', '--user', 'show', '-p', 'Environment',
+                              '--value', 'cloudcli.service'],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 'claude-opus-5'
+    found = re.search(r'CLOUDCLI_MODEL_PIN=(\S+)', out)
+    return found.group(1) if found else 'claude-opus-5'
+
+
+def cli_alias():
+    """What the installed CLI resolves the bare `opus` alias to."""
+    exe = os.environ.get('CLAUDE_CLI_PATH')
+    path = pathlib.Path(exe) if exe else None
+    if path is None or not path.is_file():
+        found = subprocess.run(['bash', '-lc', 'command -v claude'],
+                               capture_output=True, text=True).stdout.strip()
+        if not found:
+            return None
+        path = pathlib.Path(found).resolve()
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    hit = re.search(rb'opus:"(claude-opus-[0-9a-z-]+)"', blob)
+    return hit.group(1).decode() if hit else None
+
+
+def settings_model():
+    try:
+        return json.loads(SETTINGS.read_text()).get('model')
+    except (OSError, ValueError):
+        return None
+
+
+def gateway_models():
+    base, token = os.environ.get('ANTHROPIC_BASE_URL'), os.environ.get('ANTHROPIC_AUTH_TOKEN')
+    if not (base and token):
+        return None
+    out = subprocess.run(['curl', '-s', '--max-time', '25',
+                          '-H', 'Authorization: Bearer ' + token,
+                          base.rstrip('/') + '/v1/models'],
+                         capture_output=True, text=True).stdout
+    try:
+        return [m.get('id', '') for m in json.loads(out).get('data', [])]
+    except ValueError:
+        return None
+
+
+def self_check():
+    assert version('claude-opus-5-5') == (5, 5)
+    assert version('claude-opus-5[1m]') == (5,)
+    assert version('aws/claude-opus-4-8'.split('/')[-1]) == (4, 8)
+    assert version('claude-opus-5-5') > version('claude-opus-5')
+    assert version('claude-opus-5') > version('claude-opus-4-8')
+    assert family('claude-opus-5-5[1m]') == 'opus'
+    assert newest(['aws/claude-opus-5', 'aws/claude-opus-5-5', 'aws/claude-sonnet-5']) \
+        == 'aws/claude-opus-5-5'
+    assert newest(['aws/claude-sonnet-5']) is None
+    assert version('claude-fable-5-1') == (5, 1)
+    print('model-check: all checks passed')
+
+
+def main():
+    if '--self-check' in sys.argv:
+        return self_check() or 0
+
+    pin, alias, chosen = unit_pin(), cli_alias(), settings_model()
+    rows = [
+        ('web sessions (CLOUDCLI_MODEL_PIN)', pin),
+        ("the CLI's own `opus` alias", alias),
+        ('terminal sessions (settings.json)', chosen),
+    ]
+    served = None
+    if '--gateway' in sys.argv:
+        ids = gateway_models()
+        served = newest(ids) if ids else None
+        rows.append(('newest Opus the gateway serves', served))
+
+    width = max(len(label) for label, _ in rows)
+    for label, value in rows:
+        print('  %-*s  %s' % (width, label, value or '(unknown)'))
+
+    versions = {version(v) for _, v in rows if v and v != 'none' and family(v.split('/')[-1]) == 'opus'}
+    if len(versions) > 1:
+        highest = max(versions)
+        print('\nThese name different Opus versions. The newest among them is '
+              '%s; anything below it is running a model nobody chose on purpose.'
+              % '.'.join(str(n) for n in highest))
+        return 1
+    if served and pin and pin != 'none' and version(served.split('/')[-1]) > version(pin):
+        print('\nThe gateway serves %s, newer than the pin. Moving the pin is a '
+              'decision, not a default -- but it is now available.' % served)
+        return 1
+    print('\nAgreed: every source names the same Opus version.')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
