@@ -2472,7 +2472,12 @@ TR_OLD = ("                            isError: Boolean(part.is_error),\n"
 TR_NEW = ("                            isError: Boolean(part.is_error),\n"
           "                            // KIT: live tool results -- the SDK frame says tool_use_result\n"
           "                            toolUseResult: raw.toolUseResult ?? raw.tool_use_result,\n")
-apply('live tool results', 'KIT: live tool results', [(TR_OLD, TR_NEW)])
+# Upstream main reads both spellings itself since after 1.37.3, so a release
+# that carries that has nothing for this to do -- and no anchor to find.
+if 'tool_use_result' in s and 'KIT: live tool results' not in s:
+    already.append('live tool results (upstream reads both spellings)')
+else:
+    apply('live tool results', 'KIT: live tool results', [(TR_OLD, TR_NEW)])
 
 if applied:
     open(path, 'w').write(s)

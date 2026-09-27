@@ -1125,6 +1125,9 @@ Two halves, because two things were missing:
   `tool_use_result`, and the normalizer read only the first. So a live result reached the
   browser without its structured half — the diff among it — until the session was reloaded
   from disk. The normalizer reads both now. This one is a server module and lands on restart.
+  Upstream `main` already reads both spellings (after 1.37.3), so this half retires itself on
+  the release that carries it. The rendering is filed as
+  [#1455](https://github.com/siteboon/claudecodeui/issues/1455).
 
 When the CLI computes none: outside `auto`/`bypassPermissions` unless `bashEditDiffEnabled`
 (settings) or `CLAUDE_CODE_BASH_EDIT_DIFF` (env) turns it on. No diff recorded, no row drawn.
