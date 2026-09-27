@@ -1106,6 +1106,36 @@ ceiling fires, a vanished session disarms, the minimum gap holds off a second nu
 the next through, a session's own nudge text wins, the turn carries the mode it was armed with and the
 allow-list from preferences, and a corrupt state file is a no-op rather than a crash.
 
+## A session a terminal has open
+
+The CLI keeps a registry of its live processes — `~/.claude/sessions/<pid>.json`, one file per
+process, naming the session it has open, how it was started, and its tmux pane. The app never
+read it, so sending a message from the browser to a session a terminal CLI was running *resumed
+it a second time*: two agents on one conversation, writing the same files and the same
+transcript, neither knowing about the other.
+
+Every turn the app starts passes one function — the composer, the queue and the autonomy loop
+alike — so the check sits there, before anything is spawned. A registry entry for this session
+whose process is alive, is the same process (the kernel start time guards a reused pid), and was
+not spawned by this server is a refusal, and no run:
+
+```
+Not sent: this session is open in a terminal CLI, pid 12345, tmux main:@0.%0. Sending from
+here would start a second agent on the same conversation, working the same files. Send it in
+that terminal, or exit the CLI there and send it again here.
+```
+
+The server's own runs register in the same directory, so ancestry is what tells them apart: a
+process with this server among its parents is ours, and never blocks. `CLOUDCLI_TERMINAL_GUARD=0`
+turns the check off. `node launcher/terminal-guard-check.mjs` runs the shipped helper against a
+temporary registry, with a real reparented process as the terminal and a real child as one of
+ours.
+
+*Refused*, not *delivered*. Each CLI also opens a messaging socket, but what arrives there is a
+message from another session — shown to the agent as such, and held for approval in some modes —
+not a turn you typed. Routing the browser through it would hand the agent your words with less
+authority than they have, which is worse than saying plainly where to type them.
+
 ## What a Bash command changed
 
 In `auto` and `bypassPermissions` modes the CLI snapshots the repository around every Bash call

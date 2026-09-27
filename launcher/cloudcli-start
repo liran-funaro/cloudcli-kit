@@ -2254,6 +2254,115 @@ PIN = [
      1),
 ]
 
+# --- patch 20: a session a terminal has open is not the app's to run ----------
+# The CLI keeps a registry of its live processes, ~/.claude/sessions/<pid>.json,
+# naming the session each one has open. Nothing in the app reads it, so a message
+# sent from the browser to a session a terminal CLI is running resumed it a
+# second time: two agents on one conversation, writing the same files and the
+# same transcript, neither aware of the other. Every turn the app starts passes
+# queryClaudeSDK -- the composer, the queue, the autonomy loop -- so the check is
+# made once there, before anything is spawned: a live process (pid alive, and
+# the same process -- the kernel start time guards a reused pid) holding this
+# session and not one this server spawned is a refusal, with the reason, and no
+# run. CLOUDCLI_TERMINAL_GUARD=0 turns it off.
+KIT_HOLDER = r'''// KIT: terminal guard ----------------------------------------------------------
+// The process that has this session open, when it is not one of ours. Read
+// fresh on every run: the registry is a directory of small files and the answer
+// changes the moment a terminal opens or exits the session.
+async function kitTerminalHolder(providerSessionId) {
+    if (!providerSessionId || process.env.CLOUDCLI_TERMINAL_GUARD === '0') {
+        return null;
+    }
+    const dir = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'sessions');
+    let names;
+    try {
+        names = await fs.readdir(dir);
+    }
+    catch {
+        return null;
+    }
+    // /proc/<pid>/stat: fields after the parenthesised name, which may hold spaces.
+    const stat = async (pid) => {
+        try {
+            const text = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+            const rest = text.slice(text.lastIndexOf(')') + 2).split(' ');
+            return { ppid: Number(rest[1]), start: Number(rest[19]) };
+        }
+        catch {
+            return null;
+        }
+    };
+    for (const name of names) {
+        if (!name.endsWith('.json')) {
+            continue;
+        }
+        let entry;
+        try {
+            entry = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8'));
+        }
+        catch {
+            continue;
+        }
+        if (entry?.sessionId !== providerSessionId || !Number.isInteger(entry.pid)) {
+            continue;
+        }
+        try {
+            process.kill(entry.pid, 0);
+        }
+        catch {
+            continue;                               // exited; the file outlived it
+        }
+        const own = await stat(entry.pid);
+        if (own && entry.procStart && own.start !== Number(entry.procStart)) {
+            continue;                               // the pid was reused
+        }
+        // One of ours if this server is among its ancestors.
+        let ours = false;
+        for (let pid = own?.ppid, hops = 0; pid > 1 && hops < 32; hops += 1) {
+            if (pid === process.pid) {
+                ours = true;
+                break;
+            }
+            pid = (await stat(pid))?.ppid;
+        }
+        if (!ours) {
+            return entry;
+        }
+    }
+    return null;
+}
+'''
+
+GUARD = [
+    ('terminal guard helper',
+     'async function queryClaudeSDK(command, options = {}, ws, context) {\n',
+     KIT_HOLDER + 'async function queryClaudeSDK(command, options = {}, ws, context) {\n',
+     1),
+    ('terminal guard',
+     '    const providerSessionId = context.resolveProviderSessionId(sessionId);\n',
+     '    const providerSessionId = context.resolveProviderSessionId(sessionId);\n'
+     '    // KIT: refuse, rather than start a second agent on a session a terminal has open.\n'
+     '    const kitHolder = await kitTerminalHolder(providerSessionId);\n'
+     '    if (kitHolder) {\n'
+     '        const where = [kitHolder.entrypoint === \'cli\' ? \'a terminal CLI\' : `a ${kitHolder.entrypoint || \'Claude\'} process`,\n'
+     '            `pid ${kitHolder.pid}`, kitHolder.tmux ? `tmux ${kitHolder.tmux}` : null].filter(Boolean).join(\', \');\n'
+     '        console.warn(`[KIT] refused a run for ${sessionId}: open in ${where}`);\n'
+     '        ws.send(createNormalizedMessage({ kind: \'error\', provider: \'claude\', sessionId: sessionId || null,\n'
+     '            content: `Not sent: this session is open in ${where}. Sending from here would start a second agent ` '
+     '+ `on the same conversation, working the same files. Send it in that terminal, or exit the CLI there and ` '
+     '+ `send it again here.` }));\n'
+     '        ws.send(createCompleteMessage({ provider: \'claude\', sessionId: sessionId || null, exitCode: 1 }));\n'
+     '        return;\n'
+     '    }\n',
+     1),
+]
+
+guarded = group(runtime, GUARD,
+                '  terminal guard NOT applied -- anchors moved; a message to a session a '
+                'terminal has open starts a second agent on it')
+if guarded is not None:
+    runtime = guarded
+
 pinned = group(runtime, PIN,
                '  model pin NOT applied -- anchors moved; a CLI that moves the alias '
                'will 403 on a gateway that allow-lists models')
