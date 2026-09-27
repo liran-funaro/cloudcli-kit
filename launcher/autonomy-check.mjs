@@ -22,6 +22,12 @@ const state = path.join(root, 'kit-autonomy.json');
 const cost = path.join(root, 'cost.json');
 process.env.CLOUDCLI_AUTONOMY_FILE = state;
 process.env.CLOUDCLI_COST_JSON = cost;
+// Never the real reporter: it posts to Slack, and a check run is not news. The
+// stand-in records each call, so what would have been sent is asserted instead.
+const slackLog = path.join(root, 'slack.log');
+const slackMock = path.join(root, 'slack-report-mock');
+fs.writeFileSync(slackMock, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${slackLog}'\n`, { mode: 0o755 });
+process.env.CLOUDCLI_SLACK_REPORT = slackMock;
 fs.writeFileSync(cost, JSON.stringify({ cycle: { spend: '100.00' } }));
 
 // Transcripts: what the agent last said is the whole of the state we read.
@@ -197,6 +203,16 @@ fs.writeFileSync(state, '{ this is not json');
 assert.equal(await kitAutonomyPass({}), 0, 'a corrupt state file must not throw');
 fs.writeFileSync(state, '{}');
 assert.equal(await kitAutonomyPass({}), 0, 'nothing armed is nothing to do');
+
+// 10. reports went to the stand-in, one per disarm, and nowhere else. The
+//     spawn is detached, so give the last ones a moment to land.
+await new Promise((r) => setTimeout(r, 500));
+// A summary spans lines, so a call is a line that starts the reporter's argv.
+const reports = (fs.existsSync(slackLog) ? fs.readFileSync(slackLog, 'utf8').split('\n') : [])
+    .filter((line) => line.startsWith('-t autonomous mode -m '));
+assert.ok(reports.length > 0, 'disarms must report -- to the stand-in');
+assert.ok(reports.some((r) => /finished/.test(r)) && reports.some((r) => /cannot continue|timed out/.test(r)),
+    'the done and blocked disarms are both reported');
 
 console.log('autonomy: all checks passed');
 fs.rmSync(root, { recursive: true, force: true });

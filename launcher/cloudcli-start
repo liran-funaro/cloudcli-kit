@@ -3370,7 +3370,8 @@ function kitAutHeartbeat(store, sessionId, entry, spend) {
 }
 function kitAutSlack(message, summary) {
     try {
-        const child = kitSpawn('cloudcli-slack-report',
+        // Overridable so a test can hand it a stand-in: the real one posts.
+        const child = kitSpawn(process.env.CLOUDCLI_SLACK_REPORT || 'cloudcli-slack-report',
             ['-t', 'autonomous mode', '-m', message, ...(summary ? ['-s', summary] : [])],
             { stdio: 'ignore', detached: true });
         child.on('error', () => {});
