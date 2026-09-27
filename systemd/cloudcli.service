@@ -6,6 +6,16 @@ After=network-online.target
 Type=simple
 Environment=HOST=127.0.0.1
 Environment=PORT=3001
+# The SDK ships its own CLI, and 0.3.263's catalog has never heard of Opus 5.5:
+# it resolves `opus` to claude-opus-5 and warns unrecognized_model if handed 5.5,
+# assuming a 200k window for auto-compact. Point it at the installed CLI, which
+# knows the model and its real window.
+Environment=CLAUDE_CLI_PATH=%h/.local/bin/claude
+# The alias pin (see README) exists because the gateway once 403'd on
+# claude-opus-5-5. The team allow-list carries it now, so the pin names it
+# instead of holding sessions back on Opus 5. CLOUDCLI_MODEL_PIN=none drops the
+# rewrite entirely and lets the CLI's own default stand.
+Environment=CLOUDCLI_MODEL_PIN=claude-opus-5-5
 # Mid-turn steering (patch 5) is on by whatever the launcher defaults to, which
 # since 2026-08-13 is on. To reverse it, add the line below and restart -- the
 # launcher un-applies every server edit that belongs to it, and to the half of

@@ -1133,8 +1133,31 @@ catalog's own value and has to keep seeing it. A resumed session carrying the ol
 covered as well, since every run passes there. `[1m]` is preserved, so the pinned id keeps the
 1M context the option promised.
 
-Terminal sessions do not go through the server, so `~/.claude/settings.json` needs the same
-pin: `"model": "claude-opus-5[1m]"` rather than `"opus[1m]"`.
+The pin names a model rather than following the CLI, so it also has to be *moved* when the
+gateway catches up. The team was listed for `claude-opus-5-5` on 2026-09-27 — the proxy answers
+200 for it and lists `aws/claude-opus-5-5` — so the unit names that:
+
+```
+Environment=CLAUDE_CLI_PATH=%h/.local/bin/claude
+Environment=CLOUDCLI_MODEL_PIN=claude-opus-5-5
+```
+
+The second line alone is not enough, and this is the part worth remembering: the SDK ships its
+own CLI, and `claude-agent-sdk` 0.3.263 resolves `opus` to `claude-opus-5` and has never heard
+of 5.5 — handed it anyway, it runs but warns `[claude-code:unrecognized_model]` and assumes a
+200k window for auto-compact, which silently truncates a session the model would have carried
+to 1M. `CLAUDE_CLI_PATH` (which the app already honours, `claude-runtime.provider.js:271`)
+points it at the installed CLI, whose catalog knows the model and its window. Verified through
+the gateway before and after: `models billed: ['claude-opus-5-5[1m]']`.
+
+The app's own menu is a separate list and still labels `opus[1m]` as "Opus 5, 1M context
+pinned", which the pin now makes untrue. The row still resolves to whatever the pin names; only
+the sentence is stale.
+
+Terminal sessions do not go through the server, so `~/.claude/settings.json` decides there. Two
+picker rows sit one digit apart — **"Opus 5 (1M context)"** writes the explicit
+`claude-opus-5[1m]`, and **"Opus (1M context)"** writes the alias `opus[1m]` — so choosing the
+first pins Opus 5 for as long as it is chosen, whatever the CLI's default has moved to.
 
 ## The Cost tab
 

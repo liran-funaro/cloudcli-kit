@@ -2159,8 +2159,11 @@ PIN = [
     ('model pin',
      '    sdkOptions.model = options.model || CLAUDE_PREDEFINED_MODELS.DEFAULT;\n',
      '    sdkOptions.model = options.model || CLAUDE_PREDEFINED_MODELS.DEFAULT;\n'
-     '    // KIT: an alias the CLI now resolves to a model this deployment is not\n'
-     '    // allow-listed for fails every turn with a 403, so it is pinned below.\n'
+     '    // KIT: an alias resolves to whatever the CLI calls the current default,\n'
+     '    // which is a model the gateway has to allow-list first -- it 403d on\n'
+     '    // claude-opus-5-5 until the team was listed for it, and every turn failed.\n'
+     '    // So the alias is pinned to a model named on purpose, by the unit, rather\n'
+     '    // than to whatever a CLI upgrade decides. CLOUDCLI_MODEL_PIN=none opts out.\n'
      '    const KIT_MODEL_PIN = process.env.CLOUDCLI_MODEL_PIN || \'claude-opus-5\';\n'
      '    const KIT_PINNED_ALIASES = new Set([\'default\', \'best\', \'opus\', \'opus[1m]\']);\n',
      1),
