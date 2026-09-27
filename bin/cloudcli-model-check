@@ -106,6 +106,9 @@ def self_check():
         == 'aws/claude-opus-5-5'
     assert newest(['aws/claude-sonnet-5']) is None
     assert version('claude-fable-5-1') == (5, 1)
+    # the alias-not-served case is a set membership on bare names
+    assert 'claude-opus-6' not in {i.split('/')[-1] for i in ['aws/claude-opus-5-5']}
+    assert 'claude-opus-5-5' in {i.split('/')[-1] for i in ['aws/claude-opus-5-5']}
     print('model-check: all checks passed')
 
 
@@ -119,10 +122,10 @@ def main():
         ("the CLI's own `opus` alias", alias),
         ('terminal sessions (settings.json)', chosen),
     ]
-    served = None
+    served, ids_seen = None, None
     if '--gateway' in sys.argv:
-        ids = gateway_models()
-        served = newest(ids) if ids else None
+        ids_seen = gateway_models()
+        served = newest(ids_seen) if ids_seen else None
         rows.append(('newest Opus the gateway serves', served))
 
     width = max(len(label) for label, _ in rows)
@@ -136,6 +139,18 @@ def main():
               '%s; anything below it is running a model nobody chose on purpose.'
               % '.'.join(str(n) for n in highest))
         return 1
+    # An alias keeps up with the CLI by definition, so it never goes stale -- it
+    # goes 403 instead, on the day a CLI update moves the alias to a model the
+    # gateway has not been allow-listed for yet. Whoever chose the alias chose
+    # that trade; this says when it is about to be collected.
+    if ids_seen is not None and alias:
+        bare = {i.split('/')[-1] for i in ids_seen}
+        if alias not in bare:
+            users = [label for label, value in rows if value in (alias, alias + '[1m]', 'opus', 'opus[1m]')]
+            print('\nThe CLI resolves `opus` to %s, which the gateway does not serve. '
+                  'Anything riding the alias fails with 403 until the team is listed '
+                  'for it%s.' % (alias, ' (' + ', '.join(users) + ')' if users else ''))
+            return 1
     if served and pin and pin != 'none' and version(served.split('/')[-1]) > version(pin):
         print('\nThe gateway serves %s, newer than the pin. Moving the pin is a '
               'decision, not a default -- but it is now available.' % served)
