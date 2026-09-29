@@ -2369,6 +2369,43 @@ pinned = group(runtime, PIN,
 if pinned is not None:
     runtime = pinned
 
+# --- patch 21: the counter after a compaction (live) ---------------------------
+# A compaction replaces the context, and nothing the counter reads says so. It
+# republishes only from a complete per-call assistant frame, and the one call a
+# compaction makes -- the summary -- is its own sub-inference, rightly skipped.
+# So the chip went on showing the pre-compaction figure while the row above it
+# said "955k -> 17k", until the next real call finished. The boundary event
+# carries the new size itself (compact_metadata.post_tokens), so it is published
+# as a reading. And it counts as the turn's reading: a turn that is ONLY a
+# compaction -- /compact -- would otherwise fall back to the result's bill,
+# which sums the summarising call and is a much larger wrong number.
+COMPACT_READING = [
+    ('counter after compaction',
+     "    if (sdkMessage.type !== 'assistant') {\n",
+     "    // KIT: a compaction's own account of the context it left behind.\n"
+     "    if (sdkMessage.type === 'system' && sdkMessage.subtype === 'compact_boundary') {\n"
+     "        const kitMeta = sdkMessage.compact_metadata ?? sdkMessage.compactMetadata;\n"
+     "        const kitPost = readNumber(kitMeta?.post_tokens ?? kitMeta?.postTokens);\n"
+     "        return kitPost > 0 ? buildTokenBudget({ input_tokens: kitPost, cache_creation_input_tokens: 0,\n"
+     "            cache_read_input_tokens: 0, output_tokens: 0 }) : null;\n"
+     "    }\n"
+     "    if (sdkMessage.type !== 'assistant') {\n",
+     1),
+    ('counter after compaction holds',
+     "                if (message.type === 'assistant') {\n"
+     "                    assistantBudgetSent = true;\n",
+     "                // KIT: a compaction's reading is the turn's reading too.\n"
+     "                if (message.type === 'assistant' || message.subtype === 'compact_boundary') {\n"
+     "                    assistantBudgetSent = true;\n",
+     1),
+]
+
+compacted = group(runtime, COMPACT_READING,
+                  '  counter after compaction NOT applied -- anchors moved; the chip keeps '
+                  'the pre-compaction figure until the next call')
+if compacted is not None:
+    runtime = compacted
+
 # Patch 12 stands alone from all of it: guards in a helper nothing else reads.
 # Its own copy, so a moved anchor costs this patch and no other.
 budget = group(runtime, BUDGET,
@@ -2609,6 +2646,53 @@ PY
     fi
   else
     mv "$CSP.prepatch" "$CSP"
+  fi
+fi
+
+# --- patch 21, the history half: the counter after a compaction (reload) -----
+# The same gap on the way back in. Every page of history carries a reading from
+# summarizeClaudeTokenUsage, which walks the transcript backwards to the newest
+# assistant usage -- and a compaction boundary is not an assistant row, so it is
+# walked past to the call before it: the pre-compaction figure again. A boundary
+# met first is newer than any usage behind it, so its postTokens is the reading.
+TUS="$PKG/dist-server/server/modules/providers/services/provider-token-usage.service.js"
+if [[ -f $TUS ]]; then
+  if ! grep -q KIT "$TUS"; then
+    cp "$TUS" "$TUS.kitorig"
+  elif [[ -f $TUS.kitorig ]]; then
+    cp "$TUS.kitorig" "$TUS"
+  fi
+  cp "$TUS" "$TUS.prepatch"
+  if python3 - "$TUS" <<'PY'
+import sys
+path = sys.argv[1]
+s = open(path).read()
+OLD = "        const usage = entry?.type === 'assistant' ? entry.message?.usage : null;\n"
+NEW = ("        // KIT: a compaction boundary newer than any usage is the context's size now.\n"
+       "        if (entry?.type === 'system' && entry.subtype === 'compact_boundary') {\n"
+       "            const kitPost = readUsageNumber(entry.compactMetadata?.postTokens\n"
+       "                ?? entry.compact_metadata?.post_tokens);\n"
+       "            if (kitPost > 0) {\n"
+       "                inputTokens = kitPost;\n"
+       "                break;\n"
+       "            }\n"
+       "            continue;\n"
+       "        }\n" + OLD)
+if s.count(OLD) != 1:
+    print('  MISSING: counter after compaction (history) -- upstream moved it', file=sys.stderr)
+    sys.exit(1)
+open(path, 'w').write(s.replace(OLD, NEW, 1))
+print('token usage: applied counter after compaction')
+PY
+  then
+    if node --check "$TUS" >/dev/null 2>&1; then
+      rm -f "$TUS.prepatch"
+    else
+      mv "$TUS.prepatch" "$TUS"
+      echo "WARNING: the token-usage patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$TUS.prepatch" "$TUS"
   fi
 fi
 

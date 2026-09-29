@@ -849,6 +849,27 @@ sessions: applied compaction
 Neither half is gated on a flag: together they remove wrong numbers and add none. The browser
 half lands on the next reload, the server half on the next restart.
 
+**After a compaction.** The compaction row said `724k → 18k` while the chip went on showing
+724k, until the next call finished. A compaction replaces the context, and nothing the counter
+read said so: it republishes only from a complete per-call assistant frame, and the one call a
+compaction makes — the summary — is its own sub-inference and rightly skipped. The history
+reader had the same gap on the way back in, walking backwards past the boundary to the call
+before it. Measured on a real transcript cut at its boundaries:
+
+```
+pre 724871 -> post 18189    reader said 723775, now 18189
+pre 168680 -> post 10983    reader said 168222, now 10983
+pre 166939 -> post 16109    reader said 166299, now 16109
+```
+
+The boundary carries the new size itself — `compact_metadata.post_tokens` on the stream,
+`compactMetadata.postTokens` in the transcript — so both halves read it: live, the boundary
+event is published as a reading; on reload, a boundary met before any usage is newer than all of
+it. The live half also counts it as the turn's reading, which matters for a turn that is *only*
+a compaction (`/compact`): with no assistant frame the counter falls back to the `result`'s bill,
+which sums the summarising call. `node launcher/compaction-counter-check.mjs` runs both halves
+as installed.
+
 ## Compaction — landed upstream, and this stands down for it
 
 [claudecodeui#1295](https://github.com/siteboon/claudecodeui/pull/1295) merged the
