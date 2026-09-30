@@ -1127,6 +1127,24 @@ ceiling fires, a vanished session disarms, the minimum gap holds off a second nu
 the next through, a session's own nudge text wins, the turn carries the mode it was armed with and the
 allow-list from preferences, and a corrupt state file is a no-op rather than a crash.
 
+## A session runs where it lives
+
+The worktree picker sets the directory for a **new** session — and, as written, for every other
+send in the project too. Its choice lives per project, on a global the send reads, and nothing
+asked whether a session already existed. So once a worktree had been picked for one new
+session, every existing session in that repository was resumed there on its next message: its
+badge still naming its own worktree, the agent somewhere else, finding its `CLAUDE.md` "gone" and
+its branch missing. Three sessions went that way into the same checkout before it was noticed.
+
+Two halves. The send includes the picker's `cwd` only while no session is selected. And the
+server no longer takes the browser's word for a resumed session at all: the session's row
+records the directory its transcript belongs to (see *The directory a transcript belongs to*),
+so that is where a resumed turn runs, and a mismatch is logged
+(`[KIT] <id> runs in <home>, not <sent> as sent`). A new session still goes where it was sent;
+a home that no longer exists (a removed worktree) is left to the caller rather than failing the
+turn. `node launcher/session-home-check.mjs` checks the shipped send and runs the patched mapper
+against a fake sessions table.
+
 ## A session a terminal has open
 
 The CLI keeps a registry of its live processes — `~/.claude/sessions/<pid>.json`, one file per

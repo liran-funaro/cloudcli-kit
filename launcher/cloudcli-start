@@ -921,8 +921,11 @@ EMPTY_USE = re.compile(r'(\w+)\.jsx\((\w+),\{selectedSession:(\w+),currentSessio
                        r'provider:(\w+),setProvider:(\w+),textareaRef:')
 READY = re.compile(r'(\w+)\.jsx\("p",\{className:"mt-4 text-center text-sm '
                    r'text-muted-foreground/70",')
+# The selected session is captured from sessionSummary, which is built from it:
+# the picker's cwd is for a session that does not exist yet, and only that.
 OPTS = re.compile(r'return\{model:(\w+),effort:(\w+),permissionMode:(\w+)\((\w+),(\w+)\),'
-                  r'toolsSettings:(\w+),')
+                  r'toolsSettings:(\w+),'
+                  r'(?=skipPermissions:[^,]*,sessionSummary:\w+\((\w+),\w+\))')
 PANE_PROJECT = kit_names(r'showRawParameters:\w+,showThinking:\w+,selectedProject:(\w+)\}\)\{')
 counts = [len(EMPTY_SIG.findall(s)), len(EMPTY_USE.findall(s)), len(READY.findall(s)),
           len(OPTS.findall(s))]
@@ -968,11 +971,16 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
             % (j, j, j, j, j, j, j, j, j, m.group(0)))
 
     s = READY.sub(_wt_picker, s, count=1)
+    # Only while there is no session. It used to apply to every send in the
+    # project, so an EXISTING session was resumed in whichever worktree had last
+    # been picked for a new one -- its badge still naming its own, the agent
+    # somewhere else. A session runs where it lives; the server enforces that too.
     s = OPTS.sub(lambda m: 'return{model:%s,effort:%s,permissionMode:%s(%s,%s),'
-                 'toolsSettings:%s,cwd:window.__kitWtCwd'
+                 'toolsSettings:%s,cwd:!%s&&window.__kitWtCwd'
                  '&&window.__kitWtCwd.project===((e&&e.projectId)||"")'
                  '?window.__kitWtCwd.path:void 0,'
-                 % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6)),
+                 % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
+                    m.group(7)),
                  s, count=1)
     applied.append('worktree picker')
 else:
@@ -2368,6 +2376,37 @@ pinned = group(runtime, PIN,
                'will 403 on a gateway that allow-lists models')
 if pinned is not None:
     runtime = pinned
+
+# --- patch 22: a resumed session runs where it lives ----------------------------
+# The browser sends a cwd with every message, and the server passed it straight
+# to the CLI -- so whatever the browser believed was where a RESUMED session ran.
+# One wrong belief (the worktree picker's choice leaking onto existing sessions)
+# moved three sessions into a worktree none of them belonged to, each agent then
+# finding its own CLAUDE.md "gone" and its branch elsewhere. The session row
+# records the directory the transcript belongs to (patch 17), so a resumed
+# session runs there, and a mismatch is logged. A home that no longer exists
+# (a removed worktree) is left to the caller rather than failing the turn.
+HOME_CWD = [
+    ('resumed session runs at home',
+     '    if (cwd) {\n        sdkOptions.cwd = cwd;\n    }\n',
+     '    // KIT: a resumed session runs in its own directory, not the one the client names.\n'
+     '    let kitCwd = cwd;\n'
+     '    if (providerSessionId && !resumeFromScratch) {\n'
+     '        const kitHome = sessionsDb.getSessionByProviderSessionId(providerSessionId)?.project_path;\n'
+     "        if (kitHome && kitHome !== cwd && process.getBuiltinModule('fs').existsSync(kitHome)) {\n"
+     '            console.warn(`[KIT] ${providerSessionId} runs in ${kitHome}, not ${cwd || \'(none)\'} as sent`);\n'
+     '            kitCwd = kitHome;\n'
+     '        }\n'
+     '    }\n'
+     '    if (kitCwd) {\n        sdkOptions.cwd = kitCwd;\n    }\n',
+     1),
+]
+
+homed = group(runtime, HOME_CWD,
+              '  resumed-session cwd NOT applied -- anchors moved; a session resumes in '
+              'whatever directory the browser sends')
+if homed is not None:
+    runtime = homed
 
 # --- patch 21: the counter after a compaction (live) ---------------------------
 # A compaction replaces the context, and nothing the counter reads says so. It
