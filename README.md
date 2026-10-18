@@ -53,7 +53,7 @@ a tab, and structurally wrong for the rest:
 
 So it is one stylesheet, a launcher, and one tab. The upside of doing it this way rather than forking
 CloudCLI: nothing here lives in a file upstream also edits, so there is never a merge —
-upgrading is `npm i -g @cloudcli-ai/cloudcli` and one launcher run. (Upstream ships a
+upgrading is `npm install -g --prefix ~/.npm-global @cloudcli-ai/cloudcli` and one launcher run. (Upstream ships a
 release roughly every 4–5 days, and does not commit `dist/`, so a fork would mean a weekly
 merge *plus* a vite + tsc build with two native modules.)
 
@@ -67,11 +67,40 @@ merge *plus* a vite + tsc build with two native modules.)
 | **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
-Written against **CloudCLI 1.37.3** and **Claude Code 2.1.263**. The bundle and server patches
+Written against **CloudCLI 1.37.5** and **Claude Code 2.1.302** (first written against 1.37.3). The bundle and server patches
 are anchored on text upstream chose, so a later release can move an anchor: the launcher then
 reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
 untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
 CloudCLI; it patches the installed package in place, on every start.
+
+## Upgrading to 1.37.5
+
+1.37.4 and 1.37.5 shipped several things this kit had been carrying, so on 1.37.5 the launcher
+applies less, by design, and says which parts stood down:
+
+| Kit piece | On 1.37.5 |
+|---|---|
+| Bash diffs (browser) | **stands down**: upstream draws them ([#1483](https://github.com/siteboon/claudecodeui/pull/1483), from #1455) |
+| Live `tool_use_result` (server) | **stands down**: upstream reads both spellings |
+| Compaction row (server and browser) | **stands down**: upstream emits it ([#1295](https://github.com/siteboon/claudecodeui/pull/1295)) |
+| Reading files outside the project | **stands down**: upstream reads `/tmp` and `~/.claude/projects` ([#1347](https://github.com/siteboon/claudecodeui/pull/1347)). The kit's wider rule, any absolute path, is not carried forward |
+| Waiting hold | **re-anchored**: upstream now holds for work an earlier turn left running ([#1395](https://github.com/siteboon/claudecodeui/pull/1395)), which is what the kit added; the hold row is all that remains |
+| Token counter guard, compaction reading | **follow** the SDK-reported context window ([#1557](https://github.com/siteboon/claudecodeui/pull/1557)) |
+| CLI commands in the menu | **re-anchored** on the command hook that now serves the composer and the Commands tab |
+| Sidebar density (theme) | **re-targeted** on the resizable sidebar's wrapper ([#1189](https://github.com/siteboon/claudecodeui/pull/1189)) |
+
+The startup report on 1.37.5:
+
+```
+frontend: 13/14 applied -- ..., bash diffs (upstream draws them)
+  MISSING: compaction and wait rows (upstream draws compaction now; the kit rows would double it)
+sessions: live tool results (upstream reads both spellings) already in place
+file reads: upstream reads /tmp and ~/.claude/projects itself; not patched
+anchors: 5/5 ok
+```
+
+The kit's live *waiting* rows are part of the browser patch that stands down with the compaction
+row. The server still sends them, so an unpatched bundle shows each as the sentence it is.
 
 ## Deploy
 

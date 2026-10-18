@@ -11,6 +11,15 @@ import assert from 'node:assert/strict';
 
 const bundle = process.argv[2];
 const src = fs.readFileSync(bundle, 'utf8');
+// The browser half retires when upstream draws this itself (1.37.4+). A check
+// of a patch that is deliberately not applied would only ever fail.
+// The test is the one the launcher itself makes: the server module emitting
+// compaction on its own (claudecodeui#1295) is why the kit rows stood down.
+const sessionsModule = fs.readFileSync(`${process.argv[3]}/dist-server/server/modules/providers/list/claude/claude-sessions.provider.js`, 'utf8');
+if (!src.includes('const _kitDone=') && sessionsModule.includes('compact_boundary') && !sessionsModule.includes('KIT: compaction')) {
+    console.log('rows: upstream draws compaction; the kit rows stand down, nothing to check');
+    process.exit(0);
+}
 const start = src.indexOf('const _kitDone=');
 const end = src.indexOf('switch(l.kind){', start);
 assert.ok(start > 0 && end > start, 'patched loop not found in the bundle');

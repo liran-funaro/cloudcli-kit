@@ -97,10 +97,12 @@
 .dark .prose pre {
   font-size: .875rem;                /* editor.fontSize 14 */
 }
-/* The project/session sidebar, the app's only md:w-72 element. zoom scales
-   padding, icons and rows together, so density genuinely improves; a
-   font-size cannot -- every utility inside is an absolute rem. */
-[class*="md:w-72"] {
+/* The project/session sidebar. zoom scales padding, icons and rows together,
+   so density genuinely improves; a font-size cannot -- every utility inside is
+   an absolute rem. Since 1.37.4 the sidebar sits in a resizable wrapper with an
+   inline width (claudecodeui#1189), so the zoom goes on the sidebar inside it:
+   zooming the wrapper would scale its width too, and the drag handle with it. */
+[class="relative h-full flex-shrink-0 border-r border-border/50"] > :first-child {
   zoom: var(--ide-sidebar-zoom);
 }
 

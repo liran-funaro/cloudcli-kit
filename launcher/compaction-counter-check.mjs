@@ -28,7 +28,7 @@ const lift = (name) => {
 };
 assert.ok(rt.includes("message.type === 'assistant' || message.subtype === 'compact_boundary'"),
     'a compaction reading must also stand in for the turn\'s, or /compact falls back to the bill');
-const live = new Function(`${lift('readNumber')}\n${lift('buildTokenBudget')}\n${lift('extractTokenBudget')}\n`
+const live = new Function(`${lift('readNumber')}\n${rt.includes('function resolveContextWindow(') ? lift('resolveContextWindow') : ''}\n${lift('buildTokenBudget')}\n${lift('extractTokenBudget')}\n`
     + 'return extractTokenBudget;')();
 
 const boundary = live({ type: 'system', subtype: 'compact_boundary',

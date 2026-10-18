@@ -10,6 +10,12 @@ import assert from 'node:assert/strict';
 
 const [bundle, pkg] = process.argv.slice(2);
 const src = fs.readFileSync(bundle, 'utf8');
+// The browser half retires when upstream draws this itself (1.37.4+). A check
+// of a patch that is deliberately not applied would only ever fail.
+if (!src.includes('function kitBashDiff(') && src.includes('bashEditDiff')) {
+    console.log('bash diffs: upstream draws them; the kit patch stands down, nothing to check');
+    process.exit(0);
+}
 
 // 1. wired in: the Bash row renders the diff after the command, from the result.
 assert.ok(/kitBashDiff\(\w+,\w+\?\.toolUseResult\?\.bashEditDiff\)\]\}\)\}/.test(src),

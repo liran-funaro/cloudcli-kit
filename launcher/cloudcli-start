@@ -365,6 +365,15 @@ counts = [len(MERGE.findall(s)), len(SKILL.findall(s)), len(SEND.findall(s))]
 SIG = re.search(r'function \w+\(\{selectedProject:\w+,provider:\w+,input:', s)
 MERGED = MERGE.search(s)
 near = bool(SIG and MERGED and 0 < MERGED.start() - SIG.start() < 4000)
+# 1.37.4 lifted the fetch into a hook of its own, (project, provider), shared by
+# the composer and the quick-settings Commands tab -- so the provider in scope at
+# the merge is that hook's second parameter, and both menus get the commands.
+if MERGED and not near:
+    HOOK = None
+    for m in re.finditer(r'function \w+\((\w+),(\w+),\{enabled:\w+=!0\}=\{\}\)\{', s[:MERGED.start()]):
+        HOOK = m
+    if HOOK and MERGED.start() - HOOK.start() < 4000:
+        PROV, near = [HOOK.group(2)], True
 if PROV and near and counts == [1, 1, 1]:
     # Claude only: these are its commands, and the menu is shared with the other
     # providers, whose runtimes would take them for a prompt.
@@ -1136,7 +1145,12 @@ BASH_ROW = re.compile(r'(if\(\w+==="Bash"&&\w+==="input"\)\{.*?)return (\w+)\.js
                       r'status:[^}]*?defaultOpen:!1\})\)\}')
 TOOL_ROW = re.compile(r'const \w+=\w+\.memo\(\(\{toolName:\w+,toolInput:\w+,toolResult:\w+,')
 counts = (len(BASH_ROW.findall(s)), len(TOOL_ROW.findall(s)))
-if counts == (1, 1):
+# Upstream draws these itself from 1.37.4 (claudecodeui#1483, from #1455), and
+# a second copy under every Bash row is worse than none. Its bundle naming the
+# field is the test: nothing else in the app has a reason to.
+if 'bashEditDiff' in s:
+    applied.append('bash diffs (upstream draws them)')
+elif counts == (1, 1):
     s = TOOL_ROW.sub(lambda m: KIT_BASH_DIFF + m.group(0), s, count=1)
     s = BASH_ROW.sub(lambda m: '%sreturn %s.jsxs(%s.Fragment,{children:[%s.jsx(%s,%s),'
                      'kitBashDiff(%s,%s?.toolUseResult?.bashEditDiff)]})}'
@@ -1968,16 +1982,33 @@ WAIT = [
      '                backgroundWorkPending = true;\n'
      '            }\n',
      WAIT_TASKS, 1),
+    # 1.37.5 holds for work an EARLIER turn left running too (`stillOutstanding`,
+    # claudecodeui#1395/#1434), which is what this member used to add -- so all
+    # that is left of it is the row that says a hold has begun. Upstream still
+    # sends nothing at that moment.
     ('waiting hold',
-     '                if (backgroundWorkPending) {\n'
-     '                    // Work started during this turn is still running. Hold the process\n'
-     '                    // open so it can finish and report back in a follow-up turn; the\n'
-     '                    // ceiling is only a backstop for work that never reports.\n'
-     '                    backgroundWorkPending = false;\n'
+     '                if (holdForTurn) {\n'
      '                    heldForBackgroundWork = true;\n'
      '                    scheduleRelease();\n'
      '                }\n',
-     WAIT_HOLD, 1),
+     '                if (holdForTurn) {\n'
+     '                    heldForBackgroundWork = true;\n'
+     '                    scheduleRelease();\n'
+     '                    // KIT: and say what is happening. Until this row the UI showed a\n'
+     '                    // finished turn and nothing else, which reads exactly like a\n'
+     '                    // session that stopped.\n'
+     '                    kitHoldStartedAt = Date.now();\n'
+     '                    const kitMs = kitCeilingMs();\n'
+     '                    ws.send(kitWaitRow(capturedSessionId || sessionId || null,\n'
+     '                        kitWaitText(kitTasks, kitMs),\n'
+     '                        {\n'
+     "                            phase: 'holding',\n"
+     '                            ms: kitMs,\n'
+     '                            until: new Date(Date.now() + kitMs).toISOString(),\n'
+     '                            tasks: kitTasks,\n'
+     '                        }));\n'
+     '                }\n',
+     1),
 ]
 RESUME = [
     ('waiting resume',
@@ -2031,7 +2062,7 @@ BUDGET = [
     # the rest of the session. This is claudecodeui#1288, awaiting review there;
     # when it lands, this member goes the way of the six it replaced.
     ('token counter guard',
-     '    return buildTokenBudget(messageUsage);\n',
+     '    return buildTokenBudget(messageUsage, reportedContextWindow);\n',
      '    // KIT: a reading is one request\'s whole prompt -- the uncached input\n'
      '    // plus BOTH cache halves. A payload reporting neither has counted only\n'
      '    // part of its input; one reporting a single half still leaves the other\n'
@@ -2046,7 +2077,7 @@ BUDGET = [
      '        return null;\n'
      '    }\n'
      '    // And there is no context window without a prompt.\n'
-     '    const kitBudget = buildTokenBudget(messageUsage);\n'
+     '    const kitBudget = buildTokenBudget(messageUsage, reportedContextWindow);\n'
      '    return kitBudget.inputTokens > 0 ? kitBudget : null;\n', 1),
     # The modelUsage fallback can still produce a zero of its own, and a zero is
     # not a reading either.
@@ -2426,7 +2457,7 @@ COMPACT_READING = [
      "        const kitMeta = sdkMessage.compact_metadata ?? sdkMessage.compactMetadata;\n"
      "        const kitPost = readNumber(kitMeta?.post_tokens ?? kitMeta?.postTokens);\n"
      "        return kitPost > 0 ? buildTokenBudget({ input_tokens: kitPost, cache_creation_input_tokens: 0,\n"
-     "            cache_read_input_tokens: 0, output_tokens: 0 }) : null;\n"
+     "            cache_read_input_tokens: 0, output_tokens: 0 }, reportedContextWindow) : null;\n"
      "    }\n"
      "    if (sdkMessage.type !== 'assistant') {\n",
      1),
@@ -2851,6 +2882,14 @@ BLOB_NEW = """        async openFile(projectId, filePath) {
 
 if 'KIT: reading a path' in s:
     print('file reads: already in place')
+    sys.exit(0)
+# 1.37.4 reads paths outside the project itself (claudecodeui#1347), but only
+# under its read-only roots -- the temp directory and ~/.claude/projects. That
+# covers the case this patch was written for, a report an agent left in /tmp.
+# The kit's reader goes further (any absolute path); it is not carried forward,
+# because upstream's narrower rule is the safer one to stand on.
+if 'resolveReadablePath' in s:
+    print('file reads: upstream reads /tmp and ~/.claude/projects itself; not patched')
     sys.exit(0)
 for label, old in (('helper', CONFINE), ('text read', TEXT), ('blob read', BLOB)):
     if s.count(old) != 1:
@@ -3922,7 +3961,7 @@ check() {                            # check <label> <file> <literal>
   fi
 }
 if [[ -n $VER ]]; then
-  check "sidebar density"    "$AJS"  'md:w-72'
+  check "sidebar density"    "$AJS"  'relative h-full flex-shrink-0 border-r border-border/50'
   check "chat font size"     "$AJS"  'font-serif'
   check "inline-code chip"   "$AJS"  'prose-invert'
   check "accent variable"    "$ACSS" '--primary:'
