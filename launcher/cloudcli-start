@@ -600,10 +600,9 @@ def kit_row_map(m):
            'out': out, 'ex': ex, 'mid': mid})
 
 
-def kit_row_row(m):
-    """Two branches ahead of the task-notification row, modelled on it."""
-    e, x = m.group(1), m.group(2)
-    common = {'e': e, 'x': x, 'md': MD[0] if MD else '', 'tick': TICK}
+def kit_wait_branch(e, x):
+    """The wait row's branch of the renderer, on its own."""
+    common = {'e': e, 'x': x, 'tick': TICK}
     return (
         # --- a wait: the countdown is to a deadline the server chose, so the
         # bar drains rather than fills, and only a live wait carries the ticker.
@@ -633,6 +632,14 @@ def kit_row_row(m):
         '%(x)s.jsx("ul",{className:"kit-row-fold kit-wait-tasks",'
         'children:%(e)s.wait.tasks.map((_w,_i)=>%(x)s.jsx("li",{children:'
         '(_w.task_type||"task")+(_w.description?" · "+_w.description:"")},_i))})]}):null]})}):'
+        % common)
+
+
+def kit_row_row(m):
+    """Two branches ahead of the task-notification row, modelled on it."""
+    e, x = m.group(1), m.group(2)
+    common = {'e': e, 'x': x, 'md': MD[0] if MD else '', 'tick': TICK}
+    return kit_wait_branch(e, x) + (
         # --- a compaction
         '%(e)s.compact?%(x)s.jsx("div",{className:"kit-row kit-compact",'
         '...(%(e)s.compact.phase==="running"'
@@ -663,10 +670,39 @@ def kit_row_row(m):
 # have no upstream equivalent and go with them -- the activity indicator that
 # landed alongside covers the live case, and this says plainly that the rest is
 # gone rather than leaving two rows to explain.
+# The wait rows alone, for a bundle that draws compaction itself. Upstream's
+# loop now hands every row to its compaction folder before the switch, so the
+# wait branch goes in just ahead of that, with the same overtaking rule: only
+# the newest live wait row is drawn.
+WAIT_MAP = re.compile(r'(for\(const (\w+) of (\w+)\)\{if\(\2\.parentToolUseId\)continue;'
+                      r'[\s\S]{0,900}?const \w+=(\w+)\.length,(\w+)=\{displayText:\2\.displayText,'
+                      r'[^}]{0,400}?transcriptAnchorId:\2\.transcriptAnchorId,compact:\2\.compact,'
+                      r'[^}]*\};)')
+
+
+def kit_wait_map(m):
+    whole, it, lst, out, ex = m.groups()
+    return ('const _kitWait=%(lst)s.findLastIndex(_x=>_x.wait);' + whole +
+            'if(%(it)s.wait){if((%(it)s.wait.phase==="holding"||%(it)s.wait.phase==="started")'
+            '&&%(lst)s.indexOf(%(it)s)<_kitWait)continue;'
+            '%(out)s.push({type:"assistant",content:%(it)s.content||"",'
+            'timestamp:%(it)s.timestamp,...%(ex)s,wait:%(it)s.wait});continue}'
+            ) % {'it': it, 'lst': lst, 'out': out, 'ex': ex}
+
+
 counts = (len(MAP.findall(s)), len(NOTIF.findall(s)))
 if 'compactSummary' in s:
-    missing.append('compaction and wait rows (upstream draws compaction now; '
+    missing.append('compaction rows (upstream draws compaction now; '
                    'the kit rows would double it)')
+    wm = WAIT_MAP.search(s)
+    if ('_kitWait' not in s and len(WAIT_MAP.findall(s)) == 1
+            and len(NOTIF.findall(s)) == 1 and s[wm.start() - 1] in ';}'):
+        s = WAIT_MAP.sub(kit_wait_map, s, count=1)
+        s = NOTIF.sub(lambda n: kit_wait_branch(n.group(1), n.group(2)) + n.group(0), s, count=1)
+        applied.append('wait rows')
+    else:
+        missing.append('wait rows (%d/%d matches)'
+                       % (len(WAIT_MAP.findall(s)), len(NOTIF.findall(s))))
 elif MD and counts == (1, 1) and '_kitWait' not in s:
     s = MAP.sub(kit_row_map, s, count=1)
     s = NOTIF.sub(kit_row_row, s, count=1)

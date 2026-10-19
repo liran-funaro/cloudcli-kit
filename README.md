@@ -92,8 +92,8 @@ applies less, by design, and says which parts stood down:
 The startup report on 1.37.5:
 
 ```
-frontend: 13/14 applied -- ..., bash diffs (upstream draws them)
-  MISSING: compaction and wait rows (upstream draws compaction now; the kit rows would double it)
+frontend: 14/15 applied -- ..., wait rows, ..., bash diffs (upstream draws them)
+  MISSING: compaction rows (upstream draws compaction now; the kit rows would double it)
 sessions: live tool results (upstream reads both spellings) already in place
 file reads: upstream reads /tmp and ~/.claude/projects itself; not patched
 anchors: 5/5 ok
@@ -375,7 +375,7 @@ way to tell the intended site from a coincidence — and the run says what it di
 
 ```
 frontend: 9/9 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, cli commands, cost chip, compaction and wait rows,
+send while running, cli commands, cost chip, compaction and wait rows (wait rows only from 1.37.5),
 clickable paths, token chip dash
 ```
 
@@ -915,9 +915,13 @@ MISSING: compaction and wait rows (upstream draws compaction now; the kit rows w
 MISSING: compaction (upstream emits the row now)
 ```
 
-The wait rows have no upstream equivalent and go out with them, which is the honest trade:
-upstream's activity indicator names a held session's work above the composer, so the live
-case is covered, and what is lost is the record after a reload. [#1296](https://github.com/siteboon/claudecodeui/pull/1296)
+On 1.37.4 and 1.37.5 the wait rows went out with the compaction rows, because the two were
+one patch. That was a loss, not a trade: upstream's activity indicator and its background-tasks
+strip say *that* work is running, but not the hold's countdown, its ceiling, or the record of
+how each wait ended, and without the browser half the server's wait rows arrived as bare
+sentences ("Waiting on 1 background task · up to 30m"). So the wait half is now a patch of its
+own: it goes in ahead of upstream's compaction folder in the same loop, with the same
+overtaking rule, and draws the same row. `rows-check` exercises it on the served bundle. [#1296](https://github.com/siteboon/claudecodeui/pull/1296)
 proposed keeping that and was closed — most of it landed upstream by better means, including
 a task tracker that gets the foreground-`Agent` case right where the kit's rule did not.
 

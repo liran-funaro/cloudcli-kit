@@ -17,7 +17,32 @@ const src = fs.readFileSync(bundle, 'utf8');
 // compaction on its own (claudecodeui#1295) is why the kit rows stood down.
 const sessionsModule = fs.readFileSync(`${process.argv[3]}/dist-server/server/modules/providers/list/claude/claude-sessions.provider.js`, 'utf8');
 if (!src.includes('const _kitDone=') && sessionsModule.includes('compact_boundary') && !sessionsModule.includes('KIT: compaction')) {
-    console.log('rows: upstream draws compaction; the kit rows stand down, nothing to check');
+    // The wait rows stay: lift upstream's loop with the wait branch in it, up to
+    // its compaction folder, and check the overtaking rule on hand-built rows.
+    const ws = src.indexOf('const _kitWait=');
+    const we = src.indexOf('{switch(', ws);
+    assert.ok(ws > 0 && we > ws, 'wait rows: patched loop not found in the bundle');
+    const loop = src.slice(ws, we);
+    const fold = loop.match(/if\(!(\w+)\(/)[1];
+    const waitRun = new Function('e', `const t=[],n=new Map,i=new Map,d=new Map,u=false,p=new Set,`
+      + `eN=new WeakMap,${fold}=()=>false;`
+      + loop.replace(/if\(!\w+\([^{]*$/, '') + `t.push({fellThrough:m.kind,content:m.content});}return t;`);
+    let w = waitRun([
+      { kind: 'text', role: 'assistant', content: 'Waiting (old)', wait: { phase: 'holding' } },
+      { kind: 'text', role: 'assistant', content: 'Waiting (new)', wait: { phase: 'started' } },
+    ]);
+    assert.deepEqual(w.map((r) => r.content), ['Waiting (new)']);
+    assert.ok(w[0].wait, 'the row must carry its wait');
+    w = waitRun([
+      { kind: 'text', role: 'assistant', content: 'Done waiting', wait: { phase: 'done' } },
+      { kind: 'text', role: 'assistant', content: 'Waiting now', wait: { phase: 'holding', tasks: [{ task_type: 'local_bash' }] } },
+      { kind: 'text', role: 'assistant', content: 'hello' },
+    ]);
+    assert.deepEqual(w.map((r) => r.content), ['Done waiting', 'Waiting now', 'hello']);
+    assert.equal(w[1].wait.tasks.length, 1);
+    assert.equal(w[2].fellThrough, 'text');
+    assert.ok(src.includes('className:"kit-row kit-wait"'), 'wait rows: renderer branch missing');
+    console.log('rows: upstream draws compaction; the kit wait rows checked');
     process.exit(0);
 }
 const start = src.indexOf('const _kitDone=');
