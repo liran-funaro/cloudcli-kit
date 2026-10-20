@@ -951,6 +951,43 @@ elif HDR and len(SUB.findall(s)) == 1 and SUB.search(s).group(2) == HDR[0]:
 else:
     missing.append('header worktree (%d matches)' % len(SUB.findall(s)))
 
+# (18) ... and the panels that run in a directory run in the session's. Files,
+# Shell and Source Control are handed the open project, which for a worktree
+# session is the repository the fold put it under -- so git status, the file
+# tree and the terminal were the main checkout's. They get the session's own
+# checkout instead: the repository's row with that worktree's projectId and
+# path (patch 15 lists each checkout's own project row). No session, or one in
+# the main checkout, leaves them on the project as before.
+WS_MAIN = re.compile(r'function \w+\(\{selectedProject:(\w+),selectedSession:(\w+),activeTab:\w+,')
+PANELS = [
+    ('files', r'(\w+)\.jsx\((\w+),\{selectedProject:%s,onFileOpen:'),
+    ('shell', r'(\w+)\.jsx\((\w+),\{project:%s,session:%s,showHeader:!1,'),
+    ('git', r'(\w+)\.jsx\((\w+),\{selectedProject:%s,isMobile:\w+,onFileOpen:'),
+]
+wm = WS_MAIN.findall(s)
+if '_kitCheckout' in s:
+    missing.append('session checkout panels (already in place)')
+elif len(wm) == 1:
+    proj, sess = wm[0]
+    found = []
+    for name, pat in PANELS:
+        rx = re.compile(pat % ((proj, sess) if name == 'shell' else (proj,)))
+        found.append((name, rx, len(rx.findall(s))))
+    if all(n == 1 for _, _, n in found):
+        CHK = ('((_p,_s)=>{const _w=_s&&_s.worktree&&_p&&(_p._kitWorktrees||[])'
+               '.find(_x=>_x.label===_s.worktree&&_x.projectId);'
+               'return _w?{..._p,projectId:_w.projectId,path:_w.path,fullPath:_w.path}:_p})'
+               '(%s,%s)/*_kitCheckout*/' % (proj, sess))
+        for name, rx, _ in found:
+            key = 'project:' if name == 'shell' else 'selectedProject:'
+            s = rx.sub(lambda m: m.group(0).replace(key + proj, key + CHK, 1), s, count=1)
+        applied.append('session checkout panels')
+    else:
+        missing.append('session checkout panels (%s)'
+                       % ', '.join('%s %d' % (n, c) for n, _, c in found))
+else:
+    missing.append('session checkout panels (%d workspaces)' % len(wm))
+
 # (14) Which checkout a new session runs in, in the panel that asks the rest of
 # it. A new conversation opens with the provider/model card at the top of the
 # transcript -- present only until the first message -- which is where this
@@ -3268,6 +3305,9 @@ NEW_PUSH = """        projects.push({
                 ? [...kitMembers]
                     .map((memberPath) => ({
                         path: memberPath,
+                        // The checkout's own project row, for the panels that run
+                        // in a directory (files, shell, source control).
+                        projectId: projectsDb.getProjectPath(memberPath)?.project_id ?? null,
                         label: kitWorktreeLabel(projectPath, memberPath),
                         // null for a checkout git no longer lists -- a deleted
                         // worktree has no branch to report.
