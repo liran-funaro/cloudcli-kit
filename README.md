@@ -1040,12 +1040,14 @@ fold had hidden. The click found no such project, and upstream's fallback select
 `{id}` under whatever project was open. The header then read "New Session" and showed the main
 checkout, while the sidebar row, drawn from the folded list, was right. The feed, the archived
 list and the session details now carry the repository's project **id** (patch 23), while the
-name and path stay the checkout's own, so the row still says `repo.wt-1`. The header names the
-worktree after the project, as the sidebar badge does. **Files, Shell and Source Control** run
-in the session's own checkout: they used to be handed the open project, the repository, so git
-status showed the main checkout's branch and changes. Each checkout in the folded row now
-carries its own project id, and those three panels get it when the open session lives in a
-worktree. The click also falls
+name and path stay the checkout's own, so the row still says `repo.wt-1`. And
+**everything in the workspace** runs in the session's own checkout: the header, Files, the
+editor, Shell and Source Control used to be handed the open project, the repository, so git
+status showed the main checkout's branch and opening a file the tree listed from the worktree
+failed with "Path must be under project root". Each checkout in the folded row now carries
+its own project id, and the workspace swaps it in once, at the top, when the open session
+lives in a worktree; the header then names `repo.wt-1`. `launcher/session-checkout-check.mjs`
+checks that nothing downstream still reads the repository. The click also falls
 back to the project whose sessions hold the id, so a row the feed got wrong still opens with its
 title and worktree badge. Only what is *shown* was wrong: a resumed session already ran in its
 own worktree, because the server takes the directory from the session row (patch 22).

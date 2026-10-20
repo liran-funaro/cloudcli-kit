@@ -934,59 +934,32 @@ elif len(CONV.findall(s)) == 1 and kit_names(r'const (\w+)=(\w+)\(%s\)\.find\(\w
 else:
     missing.append('conversation click (%d matches)' % len(CONV.findall(s)))
 
-# (17) ... and the header says which checkout. Under a session's title it names
-# the open project, which for a worktree session is the repository the fold put
-# it under. The session row carries its worktree (patch 15), so it is named
-# beside the project, the way the sidebar badge does.
-HDR = kit_names(r'function \w+\(\{activeTab:\w+,selectedProject:(\w+),selectedSession:(\w+),')
-SUB = re.compile(r'(className:"cursor-text truncate text-sm font-semibold leading-tight '
-                 r'text-foreground",children:\w+\}\),\w+\.jsx\("div",\{className:"truncate '
-                 r'text-\[11px\] leading-tight text-muted-foreground",children:)(\w+)\.displayName\}')
-if '_kitHdrWt' in s:
-    missing.append('header worktree (already in place)')
-elif HDR and len(SUB.findall(s)) == 1 and SUB.search(s).group(2) == HDR[0]:
-    s = SUB.sub(lambda m: m.group(1) + '%s.displayName+((%s&&%s.worktree)?" \\u00b7 "+%s.worktree:"")'
-                '/*_kitHdrWt*/}' % (HDR[0], HDR[1], HDR[1], HDR[1]), s, count=1)
-    applied.append('header worktree')
-else:
-    missing.append('header worktree (%d matches)' % len(SUB.findall(s)))
-
-# (18) ... and the panels that run in a directory run in the session's. Files,
-# Shell and Source Control are handed the open project, which for a worktree
-# session is the repository the fold put it under -- so git status, the file
-# tree and the terminal were the main checkout's. They get the session's own
-# checkout instead: the repository's row with that worktree's projectId and
-# path (patch 15 lists each checkout's own project row). No session, or one in
-# the main checkout, leaves them on the project as before.
-WS_MAIN = re.compile(r'function \w+\(\{selectedProject:(\w+),selectedSession:(\w+),activeTab:\w+,')
-PANELS = [
-    ('files', r'(\w+)\.jsx\((\w+),\{selectedProject:%s,onFileOpen:'),
-    ('shell', r'(\w+)\.jsx\((\w+),\{project:%s,session:%s,showHeader:!1,'),
-    ('git', r'(\w+)\.jsx\((\w+),\{selectedProject:%s,isMobile:\w+,onFileOpen:'),
-]
+# (18) ... and everything that runs in a directory runs in the session's. The
+# workspace hands Files, the editor, Shell and Source Control the open project,
+# which for a worktree session is the repository the fold put it under -- so git
+# status, the file tree and the terminal were the main checkout's, and opening a
+# file the tree listed from the worktree failed "Path must be under project
+# root". The workspace now receives the session's own checkout instead: the
+# repository's row with that worktree's projectId and path (patch 15 lists each
+# checkout's own project row), named after that checkout -- `repo.wt-1` -- so
+# the header under the title says which one. Swapped once, at the top, so no
+# panel can miss it.
+# No session, or one in the main checkout, leaves it on the project as before.
+WS_MAIN = re.compile(r'(function \w+\(\{selectedProject:)(\w+)(,selectedSession:)(\w+)'
+                     r'(,activeTab:\w+,[^)]*\)\{)')
 wm = WS_MAIN.findall(s)
 if '_kitCheckout' in s:
-    missing.append('session checkout panels (already in place)')
+    missing.append('session checkout (already in place)')
 elif len(wm) == 1:
-    proj, sess = wm[0]
-    found = []
-    for name, pat in PANELS:
-        rx = re.compile(pat % ((proj, sess) if name == 'shell' else (proj,)))
-        found.append((name, rx, len(rx.findall(s))))
-    if all(n == 1 for _, _, n in found):
-        CHK = ('((_p,_s)=>{const _w=_s&&_s.worktree&&_p&&(_p._kitWorktrees||[])'
-               '.find(_x=>_x.label===_s.worktree&&_x.projectId);'
-               'return _w?{..._p,projectId:_w.projectId,path:_w.path,fullPath:_w.path}:_p})'
-               '(%s,%s)/*_kitCheckout*/' % (proj, sess))
-        for name, rx, _ in found:
-            key = 'project:' if name == 'shell' else 'selectedProject:'
-            s = rx.sub(lambda m: m.group(0).replace(key + proj, key + CHK, 1), s, count=1)
-        applied.append('session checkout panels')
-    else:
-        missing.append('session checkout panels (%s)'
-                       % ', '.join('%s %d' % (n, c) for n, _, c in found))
+    s = WS_MAIN.sub(lambda m: '%s_kitRepo%s%s%sconst %s=(_s=>{const _w=_s&&_s.worktree&&_kitRepo'
+                    '&&(_kitRepo._kitWorktrees||[]).find(_x=>_x.label===_s.worktree&&_x.projectId);'
+                    'return _w?{..._kitRepo,projectId:_w.projectId,path:_w.path,fullPath:_w.path,displayName:(_kitRepo.displayName||"")+_w.label}'
+                    ':_kitRepo})(%s)/*_kitCheckout*/;'
+                    % (m.group(1), m.group(3), m.group(4), m.group(5), m.group(2), m.group(4)),
+                    s, count=1)
+    applied.append('session checkout')
 else:
-    missing.append('session checkout panels (%d workspaces)' % len(wm))
+    missing.append('session checkout (%d workspaces)' % len(wm))
 
 # (14) Which checkout a new session runs in, in the panel that asks the rest of
 # it. A new conversation opens with the provider/model card at the top of the
