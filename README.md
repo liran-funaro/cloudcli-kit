@@ -1039,7 +1039,9 @@ session's project from its own path, so a worktree session arrived with the id o
 fold had hidden. The click found no such project, and upstream's fallback selected a bare
 `{id}` under whatever project was open. The header then read "New Session" and showed the main
 checkout, while the sidebar row, drawn from the folded list, was right. The feed, the archived
-list and the session details now name the repository's project (patch 23). The click also falls
+list and the session details now carry the repository's project **id** (patch 23), while the
+name and path stay the checkout's own, so the row still says `repo.wt-1`. The header names the
+worktree after the project, as the sidebar badge does. The click also falls
 back to the project whose sessions hold the id, so a row the feed got wrong still opens with its
 title and worktree badge. Only what is *shown* was wrong: a resumed session already ran in its
 own worktree, because the server takes the directory from the session row (patch 22).
