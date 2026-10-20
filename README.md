@@ -1034,6 +1034,17 @@ git twice.
 real worktrees, one of them removed properly mid-test, plus a lookalike directory and a
 foreign-root path that must both stay separate.
 
+The **Conversations tab and deep links** have to agree with the fold as well. Their feed named a
+session's project from its own path, so a worktree session arrived with the id of a project the
+fold had hidden. The click found no such project, and upstream's fallback selected a bare
+`{id}` under whatever project was open. The header then read "New Session" and showed the main
+checkout, while the sidebar row, drawn from the folded list, was right. The feed, the archived
+list and the session details now name the repository's project (patch 23). The click also falls
+back to the project whose sessions hold the id, so a row the feed got wrong still opens with its
+title and worktree badge. Only what is *shown* was wrong: a resumed session already ran in its
+own worktree, because the server takes the directory from the session row (patch 22).
+`launcher/conversation-click-check.mjs` runs the patched handler out of the served bundle.
+
 ## The directory a transcript belongs to
 
 ```bash

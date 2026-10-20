@@ -907,6 +907,33 @@ elif len(RECENT.findall(s)) == 1:
 else:
     missing.append('autonomy chip, conversations (%d matches)' % len(RECENT.findall(s)))
 
+# (16) A Conversations click whose project id names no loaded project. Patch 23
+# makes the feed name the repository a worktree session is folded under, but a
+# row can still name a project the list does not hold -- a feed read before the
+# fold, a row the sidebar has not loaded -- and upstream then selects a bare
+# {id} under whatever project is open: no summary, so the header says "New
+# Session", and the open project's path. The project whose sessions hold the id
+# is the right one, and its row carries the summary and the worktree.
+CONV = re.compile(r'onConversationResultClick:\((\w+),(\w+),(\w+),(\w+),(\w+)\)=>\{'
+                  r'const (\w+)=\3\|\|"claude",(\w+)=\1\?(\w+)\.find\((\w+)=>\9\.projectId===\1\):null,')
+if '_kitOwnsIt' in s:
+    missing.append('conversation click (already in place)')
+elif len(CONV.findall(s)) == 1 and kit_names(r'const (\w+)=(\w+)\(%s\)\.find\(\w+=>\w+\.id===%s\)'
+                                             % (CONV.search(s).group(7), CONV.search(s).group(2))):
+    m = CONV.search(s)
+    lst = kit_names(r'const (\w+)=(\w+)\(%s\)\.find\(\w+=>\w+\.id===%s\)'
+                    % (m.group(7), m.group(2)))[1]
+    # Parenthesised: `a?b:null||c` is `a?b:(null||c)`, which never falls back
+    # when the id is there but names nothing.
+    head = 'const %s=%s||"claude",%s=' % (m.group(6), m.group(3), m.group(7))
+    lookup = m.group(0)[m.group(0).index(head) + len(head):-1]
+    s = s[:m.start()] + m.group(0)[:m.group(0).index(head) + len(head)] + (
+        '(%(lookup)s)||%(ps)s.find(_kitOwnsIt=>%(lst)s(_kitOwnsIt).some(_s=>_s.id===%(sid)s))||null,'
+        % {'lookup': lookup, 'ps': m.group(8), 'lst': lst, 'sid': m.group(2)}) + s[m.end():]
+    applied.append('conversation click')
+else:
+    missing.append('conversation click (%d matches)' % len(CONV.findall(s)))
+
 # (14) Which checkout a new session runs in, in the panel that asks the rest of
 # it. A new conversation opens with the provider/model card at the top of the
 # transcript -- present only until the first message -- which is where this
@@ -3342,6 +3369,88 @@ SUBPY
     fi
   else
     mv "$SUB.prepatch" "$SUB"
+  fi
+fi
+
+# --- patch 23: the conversations feed names the row the sidebar shows ----------
+# The Conversations tab and a deep link name a session's project from its own
+# path, so a session in a worktree came with the worktree's project id -- a
+# project patch 15 folds away. The click then found no such project, and the
+# browser fell back to a bare session with no summary under whatever project was
+# open: the header said "New Session" and showed the main checkout, while the
+# sidebar row, read from the folded list, was right. Both now name the
+# repository's project, as patch 16 does for the live broadcast.
+SSV="$PKG/dist-server/server/modules/providers/services/sessions.service.js"
+if [[ -f $SSV ]]; then
+  if ! grep -q KIT "$SSV"; then
+    cp "$SSV" "$SSV.kitorig"
+  elif [[ -f $SSV.kitorig ]]; then
+    cp "$SSV.kitorig" "$SSV"
+    [[ ${CLOUDCLI_WORKTREES:-1} == 1 ]] && echo "  re-patching the sessions service from the packaged original"
+  fi
+fi
+if [[ ${CLOUDCLI_WORKTREES:-1} == 1 && -f $SSV ]]; then
+  cp "$SSV" "$SSV.prepatch"
+  if python3 - "$SSV" <<'SSVPY'
+import sys
+
+path = sys.argv[1]
+s = open(path).read()
+if 'KIT: the repository owns the row' in s:
+    print('sessions feed: already in place')
+    sys.exit(0)
+
+IMPORT = "import { projectsDb, sessionsDb } from '../../../modules/database/index.js';\n"
+NEW_IMPORT = IMPORT + ("import { kitWorktreeIndex } from '../../../modules/projects/services/"
+                       "projects-with-sessions-fetch.service.js';\n"
+                       "// KIT: the repository owns the row a worktree session is shown under.\n"
+                       "function kitOwnerProject(projectPath) {\n"
+                       "    const repoRoot = projectPath\n"
+                       "        ? kitWorktreeIndex(projectsDb.getProjectPaths()).repoOf.get(projectPath)\n"
+                       "        : null;\n"
+                       "    return repoRoot && repoRoot !== projectPath ? projectsDb.getProjectPath(repoRoot) : null;\n"
+                       "}\n")
+assert s.count(IMPORT) == 1, 'import anchor'
+s = s.replace(IMPORT, NEW_IMPORT, 1)
+
+# the recent feed and the archived list both cache one lookup per path
+OLD_FEED = """                    projectCache.set(projectPath, projectsDb.getProjectPath(projectPath));"""
+NEW_FEED = """                    projectCache.set(projectPath, kitOwnerProject(projectPath) ?? projectsDb.getProjectPath(projectPath));"""
+assert s.count(OLD_FEED) == 2, 'feed lookups'
+s = s.replace(OLD_FEED, NEW_FEED)
+
+# a deep link resolves through the same answer, and its path is the project's
+OLD_DETAILS = """        const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+        return {
+            sessionId: session.session_id,
+            provider: session.provider,
+            summary: session.custom_name?.trim() || '',"""
+NEW_DETAILS = """        const kitOwner = kitOwnerProject(projectPath);
+        const project = kitOwner ?? (projectPath ? projectsDb.getProjectPath(projectPath) : null);
+        projectPath = kitOwner?.project_path ?? projectPath;
+        return {
+            sessionId: session.session_id,
+            provider: session.provider,
+            summary: session.custom_name?.trim() || '',"""
+assert s.count(OLD_DETAILS) == 1, 'details lookup'
+s = s.replace(OLD_DETAILS, NEW_DETAILS, 1)
+OLD_CONST = """        const projectPath = session.project_path?.trim() ? session.project_path : null;
+        const kitOwner"""
+assert s.count(OLD_CONST) == 1, 'details path'
+s = s.replace(OLD_CONST, OLD_CONST.replace('const projectPath', 'let projectPath'), 1)
+
+open(path, 'w').write(s)
+print('sessions feed: applied')
+SSVPY
+  then
+    if node --check "$SSV" >/dev/null 2>&1; then
+      rm -f "$SSV.prepatch"
+    else
+      mv "$SSV.prepatch" "$SSV"
+      echo "WARNING: the sessions feed patch broke syntax, reverted" >&2
+    fi
+  else
+    mv "$SSV.prepatch" "$SSV"
   fi
 fi
 
