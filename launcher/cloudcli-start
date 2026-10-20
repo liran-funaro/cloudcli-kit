@@ -2505,8 +2505,13 @@ if pinned is not None:
 # moved three sessions into a worktree none of them belonged to, each agent then
 # finding its own CLAUDE.md "gone" and its branch elsewhere. The session row
 # records the directory the transcript belongs to (patch 17), so a resumed
-# session runs there, and a mismatch is logged. A home that no longer exists
-# (a removed worktree) is left to the caller rather than failing the turn.
+# session runs there, and a mismatch is logged.
+#
+# A home that no longer exists (a removed worktree) cannot be run in at all, and
+# neither can whatever cwd the browser fell back to for it, which is that same
+# dead path. Spawning there fails with ENOENT, which the SDK reports as a libc
+# mismatch -- "native binary ... exists but failed to launch". So a dead
+# directory is refused with a sentence that says which one, before the spawn.
 HOME_CWD = [
     ('resumed session runs at home',
      '    if (cwd) {\n        sdkOptions.cwd = cwd;\n    }\n',
@@ -2518,6 +2523,11 @@ HOME_CWD = [
      '            console.warn(`[KIT] ${providerSessionId} runs in ${kitHome}, not ${cwd || \'(none)\'} as sent`);\n'
      '            kitCwd = kitHome;\n'
      '        }\n'
+     '    }\n'
+     "    if (kitCwd && !process.getBuiltinModule('fs').existsSync(kitCwd)) {\n"
+     '        throw new Error(`This session\'s directory no longer exists: ${kitCwd}. '
+     'It was probably a worktree that has since been removed. Start a new session '
+     'in a checkout that still exists.`);\n'
      '    }\n'
      '    if (kitCwd) {\n        sdkOptions.cwd = kitCwd;\n    }\n',
      1),

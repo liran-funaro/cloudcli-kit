@@ -1192,10 +1192,20 @@ Two halves. The send includes the picker's `cwd` only while no session is select
 server no longer takes the browser's word for a resumed session at all: the session's row
 records the directory its transcript belongs to (see *The directory a transcript belongs to*),
 so that is where a resumed turn runs, and a mismatch is logged
-(`[KIT] <id> runs in <home>, not <sent> as sent`). A new session still goes where it was sent;
-a home that no longer exists (a removed worktree) is left to the caller rather than failing the
-turn. `node launcher/session-home-check.mjs` checks the shipped send and runs the patched mapper
-against a fake sessions table.
+(`[KIT] <id> runs in <home>, not <sent> as sent`). A new session still goes where it was sent.
+
+A home that no longer exists — a removed worktree — is refused before anything is spawned:
+
+```
+This session's directory no longer exists: ~/workspace/repo.wt-2. It was probably a worktree
+that has since been removed. Start a new session in a checkout that still exists.
+```
+
+It used to be left to the caller, which meant the CLI was spawned in that same dead directory.
+The spawn failed with `ENOENT`, and the SDK reports any failed spawn of its native binary as a
+libc mismatch ("native binary … exists but failed to launch … musl"), which sends you looking at
+the wrong thing entirely. `node launcher/session-home-check.mjs` checks the shipped send and runs
+the patched mapper against a fake sessions table.
 
 ## A session a terminal has open
 
