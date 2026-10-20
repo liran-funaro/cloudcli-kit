@@ -85,6 +85,7 @@ globalThis.__kitProjectsDb = {
   getProjectPaths: () => projectRows,
   getArchivedProjectPaths: () => [],
   getProjectById: (id) => projectRows.find((row) => row.project_id === id) ?? null,
+  getProjectPath: (p) => projectRows.find((row) => row.project_path === p) ?? null,
 };
 globalThis.__kitSessionsDb = {
   getSessionsByProjectPathPage: (p, limit, offset) => (sessionRows[p] ?? []).slice(offset, offset + limit),
@@ -115,14 +116,16 @@ assert.equal(demo.sessionMeta.total, 4, 'the total counts every checkout, delete
 
 // the picker's own data: a checkout, its label, and the branch it has out
 const picker = demo._kitWorktrees;
-assert.ok(picker.length >= 3, 'the picker lists every checkout');
+assert.deepEqual(picker.map((w) => w.label), ['', '.storage', '.wt-1'],
+  'the picker lists every checkout still on disk, and not the removed one');
 const mainEntry = picker.find((w) => w.label === '');
 assert.ok(mainEntry && mainEntry.path === repo, 'the main checkout is in the list, unlabelled');
 assert.equal(typeof mainEntry.branch, 'string', 'and reports the branch it has out');
 const wt1 = picker.find((w) => w.label === '.wt-1');
 assert.equal(wt1.branch, 'b.wt-1', 'a worktree reports its own branch');
-const goneEntry = picker.find((w) => w.label === '.gone');
-assert.equal(goneEntry.branch, null, 'a checkout git no longer lists reports no branch');
+assert.equal(wt1.projectId, 'p-wt1', "and carries its own project row, for the workspace's panels");
+assert.equal(picker.find((w) => w.label === '.gone'), undefined,
+  'nothing can be started in a removed worktree, so it is not offered');
 
 const other = projects.find((p) => p.path === unrelated);
 assert.equal(other.sessions.length, 1);

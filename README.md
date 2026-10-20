@@ -992,13 +992,20 @@ worktree [ main · release/2.x ⌄ ]
            │ .signing │ feat/faster-signing    │
            │ .storage │ design/storage         │
            │ .wt-2    │ detached               │
-           │ .archive │                        │
            └──────────┴────────────────────────┘
 ```
 
 `git worktree list --porcelain` reports the branch in the same call that reports the paths, so
-this costs a few lines of parsing and no extra process; `detached` is reported as such, and a
-checkout git no longer lists — a deleted worktree — carries no branch at all.
+this costs a few lines of parsing and no extra process; `detached` is reported as such. A
+**removed worktree is not offered**: its sessions stay folded under the repository, but nothing
+can be started in a directory that is gone, so the list holds only checkouts still on disk.
+
+The list is **re-read every time it opens**. It travels with the projects list, which the page
+otherwise fetches once and then only on a reconnect, so a worktree added or removed after the
+page loaded used to need a browser reload. Opening the picker now runs upstream's silent
+projects refresh, the open project takes the fresh list (upstream folds a fresh row into the
+selected one field by field, and the checkouts were not one of its fields), and the server's
+cache of `git worktree list` lasts 3 seconds rather than 30.
 
 The columns are **laid out, not spelled out**, and that took two false starts worth recording. A
 native `<select>` has nothing but option text to work with, so the first attempt padded each label

@@ -1044,7 +1044,11 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
         return (
             '_kitProj&&(_kitProj._kitWorktrees||[]).length>1'
             '?%s.jsxs("details",{className:"kit-wt relative mx-auto mt-4 w-fit '
-            'text-muted-foreground",style:{fontSize:"12px"},children:['
+            'text-muted-foreground",style:{fontSize:"12px"},'
+            # Opening the list re-reads the projects, so a worktree added or
+            # removed since the page loaded shows up without a reload.
+            'onToggle:_e=>{if(_e.currentTarget.open&&window.__kitRefreshProjects)'
+            'window.__kitRefreshProjects()},children:['
             '%s.jsxs("summary",{className:"flex cursor-pointer items-center gap-2 '
             'rounded-lg border border-border/60 bg-background px-2 py-1 hover:bg-accent/40",'
             'style:{listStyle:"none"},children:['
@@ -1082,6 +1086,40 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
                     m.group(7)),
                  s, count=1)
     applied.append('worktree picker')
+    # Upstream's silent projects refresh, the one a reconnect calls, published
+    # for the picker. Every mount of the projects state overwrites it, so it is
+    # always the live one.
+    SILENT = re.compile(r'(\w+)=f\.useCallback\(async\(\)=>\{await (\w+)\(\{showLoadingState:!1\}\)\},\[\2\]\)')
+    if len(SILENT.findall(s)) == 1:
+        s = SILENT.sub(lambda m: '%s=f.useCallback(async()=>{await %s({showLoadingState:!1})},[%s]),'
+                       '_kitPub=(window.__kitRefreshProjects=%s)'
+                       % (m.group(1), m.group(2), m.group(2), m.group(1)), s, count=1)
+        # ... and the refresh has to reach the open project. Upstream folds a
+        # fresh row into the selected one field by field, and the checkout list
+        # is not one of its fields, so the picker kept the list it mounted with.
+        MERGE = re.compile(r'function (\w+)\((\w+),(\w+)\)\{if\(\2\.projectId!==\3\.projectId\)return \2;'
+                           r'([^}]*?)return \2\.displayName===\3\.displayName&&')
+        if len(MERGE.findall(s)) == 1:
+            s = MERGE.sub(lambda m: 'function %s(%s,%s){if(%s.projectId!==%s.projectId)return %s;'
+                          '%sif(JSON.stringify(%s._kitWorktrees||[])!==JSON.stringify(%s._kitWorktrees||[]))'
+                          '%s={...%s,_kitWorktrees:%s._kitWorktrees};return %s.displayName===%s.displayName&&'
+                          % (m.group(1), m.group(2), m.group(3), m.group(2), m.group(3), m.group(2),
+                             m.group(4), m.group(2), m.group(3), m.group(2), m.group(2), m.group(3),
+                             m.group(2), m.group(3)), s, count=1)
+            # The list is only swapped for the fresh one when a field upstream
+            # compares has changed; the checkouts have to be one of them.
+            CHG = re.compile(r'(\w+)\((\w+)\.taskmaster\)!==\1\((\w+)\.taskmaster\):!0\}\)')
+            if len(CHG.findall(s)) == 1:
+                s = CHG.sub(lambda c: '%s(%s.taskmaster)!==%s(%s.taskmaster)||%s(%s._kitWorktrees)!==%s(%s._kitWorktrees):!0})'
+                            % (c.group(1), c.group(2), c.group(1), c.group(3),
+                               c.group(1), c.group(2), c.group(1), c.group(3)), s, count=1)
+                applied.append('worktree picker refresh')
+            else:
+                missing.append('worktree picker refresh (change check: %d matches)' % len(CHG.findall(s)))
+        else:
+            missing.append('worktree picker refresh (merge: %d matches)' % len(MERGE.findall(s)))
+    else:
+        missing.append('worktree picker refresh (%d matches)' % len(SILENT.findall(s)))
 else:
     missing.append('worktree picker (%s matches%s)'
                    % ('/'.join(str(c) for c in counts),
@@ -3059,8 +3097,10 @@ import { existsSync } from 'node:fs';
 // Discovery is git's, not a registry of ours, so a worktree made with a plain
 // `git worktree add` is tracked without anyone adding a project for it. Both
 // git calls fork a process, so the answer is cached for a few seconds -- the
-// sidebar asks for this list on every refresh.
-const KIT_WT_TTL_MS = 30000;
+// sidebar asks for this list on every refresh. Only a few: the worktree picker
+// re-reads the list each time it opens, and a worktree created a moment ago has
+// to be in it.
+const KIT_WT_TTL_MS = 3000;
 let kitWtCache = { at: 0, byRepo: new Map(), repoOf: new Map(), branchOf: new Map() };
 
 function kitGit(dir, args) {
@@ -3284,16 +3324,19 @@ OLD_PUSH = """        projects.push({
             path: projectPath,"""
 NEW_PUSH = """        projects.push({
             // KIT: every checkout of this repository, main first by empty label.
+            // Only the ones still on disk: a removed worktree keeps its sessions
+            // folded here, but nothing can be started (or opened) in it.
             _kitWorktrees: kitMembers && kitMembers.size > 1
                 ? [...kitMembers]
+                    .filter((memberPath) => existsSync(memberPath))
                     .map((memberPath) => ({
                         path: memberPath,
                         // The checkout's own project row, for the panels that run
                         // in a directory (files, shell, source control).
                         projectId: projectsDb.getProjectPath(memberPath)?.project_id ?? null,
                         label: kitWorktreeLabel(projectPath, memberPath),
-                        // null for a checkout git no longer lists -- a deleted
-                        // worktree has no branch to report.
+                        // null for a checkout git does not list (a directory
+                        // that was a worktree once and is still there).
                         branch: kitIndex.branchOf.get(memberPath) ?? null,
                     }))
                     .sort((left, right) => left.label.localeCompare(right.label))
