@@ -907,6 +907,52 @@ elif len(RECENT.findall(s)) == 1:
 else:
     missing.append('autonomy chip, conversations (%d matches)' % len(RECENT.findall(s)))
 
+# (19) The Conversations tab, kept in recency order while it is open. It is
+# fetched once when the tab opens, and upstream folds only renames into it from
+# the live project list -- so a conversation that just got a message stayed
+# where it was, and a new one did not appear, until the page was reloaded. The
+# live list already has both: every `session_upserted` updates a session's
+# lastActivity, and adds a session it has not seen. So the memo that folds the
+# renames also takes each row's lastActivity from there, adds the sessions it
+# has no row for (named by their project, as the server would name them), and
+# re-sorts newest first. Rows the live list does not hold -- an older page of
+# the feed -- keep their place in the order by their own timestamp.
+RECENCY = re.compile(r'(\w+)=f\.useMemo\(\(\)=>\{if\((\w+)\.length===0\)return \2;const (\w+)=new Map;'
+                     r'for\(const (\w+) of (\w+)\)for\(const (\w+) of \4\.sessions\?\?\[\]\)\{'
+                     r'.{0,300}?return (\w+)\?(\w+):\2\},\[\5,\2\]\)')
+if '_kitByRecency' in s:
+    missing.append('conversations by recency (already in place)')
+elif len(RECENCY.findall(s)) == 1:
+    m = RECENCY.search(s)
+    memo, rows, projects, merged = m.group(1), m.group(2), m.group(5), m.group(8)
+    whole = m.group(0)
+    head = whole[:whole.rindex('return %s?%s:%s},[' % (m.group(7), merged, rows))]
+    s = s[:m.start()] + head + (
+        'const _kitByRecency=(_list=>{const _live=new Map;'
+        'for(const _p of %(ps)s)for(const _x of _p.sessions??[])'
+        '_live.set(String(_x.id),{_p,_x});'
+        'const _seen=new Set;'
+        'const _out=_list.map(_r=>{_seen.add(_r.sessionId);const _l=_live.get(_r.sessionId);'
+        'return _l&&_l._x.lastActivity&&_l._x.lastActivity!==_r.lastActivity'
+        '?{..._r,lastActivity:_l._x.lastActivity}:_r});'
+        # A session the feed has not listed yet is new, so only one that is newer
+        # than everything the feed holds is added: an old session the projects
+        # list happens to carry is not, or the tab would fill with history.
+        'const _top=_list.reduce((_a,_r)=>_r.lastActivity&&_r.lastActivity>_a?_r.lastActivity:_a,"");'
+        'for(const[_id,_l]of _live)if(!_seen.has(_id)&&_l._x.lastActivity&&_l._x.lastActivity>_top)'
+        '_out.push({sessionId:_id,provider:_l._x.__provider||_l._x.provider||"claude",'
+        # Named after its own checkout, as the feed names it (patch 23).
+        'projectId:_l._p.projectId,projectDisplayName:(_l._p.displayName||"")+(_l._x.worktree||""),'
+        'sessionTitle:(_l._x.summary||"").trim()||_id,lastActivity:_l._x.lastActivity});'
+        'const _t=_r=>Date.parse(_r.lastActivity||"")||0;'
+        '_out.sort((_a,_b)=>_t(_b)-_t(_a));'
+        'return _out.length===_list.length&&_out.every((_r,_i)=>_r===_list[_i])?_list:_out})'
+        '(%(merged)s?%(m2)s:%(rows)s);return _kitByRecency},[%(ps)s,%(rows)s])'
+        % {'ps': projects, 'rows': rows, 'merged': m.group(7), 'm2': merged}) + s[m.end():]
+    applied.append('conversations by recency')
+else:
+    missing.append('conversations by recency (%d matches)' % len(RECENCY.findall(s)))
+
 # (16) A Conversations click whose project id names no loaded project. Patch 23
 # makes the feed name the repository a worktree session is folded under, but a
 # row can still name a project the list does not hold -- a feed read before the

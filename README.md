@@ -1186,6 +1186,20 @@ ceiling fires, a vanished session disarms, the minimum gap holds off a second nu
 the next through, a session's own nudge text wins, the turn carries the mode it was armed with and the
 allow-list from preferences, and a corrupt state file is a no-op rather than a crash.
 
+## The Conversations tab, in recency order
+
+The Conversations tab is fetched once, when it opens, and upstream folds only **renames** into it
+afterwards. So a conversation that just got a message stayed where it was, and a new one did not
+show up, until the page was reloaded.
+
+The projects list beside it is kept current: the session watcher sends a `session_upserted` for
+every transcript write, and each one carries the session's `lastActivity`, or adds a session the
+list had not seen. The memo that folds the renames now also takes each row's `lastActivity` from
+there, adds sessions newer than anything the tab holds (an old session the projects list happens
+to carry is not added, or the tab would fill with history), and sorts newest first. When nothing
+moved, it returns the same array, so the list does not re-render.
+`launcher/conversations-recency-check.mjs` runs the patched memo out of the served bundle.
+
 ## A session runs where it lives
 
 The worktree picker sets the directory for a **new** session — and, as written, for every other
