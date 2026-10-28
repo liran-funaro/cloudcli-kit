@@ -74,10 +74,19 @@ globalThis.__kitSessions = sessions;
 globalThis.__kitProcessing = processing;
 globalThis.__kitSent = sent;
 
+// 1.37.6 (claudecodeui#1613) also tells clients when a scheduled message changes.
+const scheduledStub = path.join(root, 'scheduled.mjs');
+fs.writeFileSync(scheduledStub, 'export function announceScheduledMessagesChanged() {}\n');
+
 const loadable = path.join(root, 'dispatcher.mjs');
 fs.writeFileSync(loadable, src
     .replace("'../../../modules/database/index.js'", JSON.stringify(dbStub))
-    .replace("'../../../modules/websocket/index.js'", JSON.stringify(wsStub)));
+    .replace("'../../../modules/websocket/index.js'", JSON.stringify(wsStub))
+    .replace("'../../../modules/scheduled-messages/services/scheduled-messages.service.js'",
+        JSON.stringify(scheduledStub))
+    // Pure helpers with no app state behind them: the real file, not a stub.
+    .replace("'../../../shared/utils.js'",
+        JSON.stringify(path.join(path.dirname(MOD), '../../../shared/utils.js'))));
 const { kitAutonomyPass, kitAutNudge } = await import(loadable);
 
 // The dialog shows the turn before it is sent, and it must be THE turn: the

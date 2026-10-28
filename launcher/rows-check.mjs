@@ -24,9 +24,22 @@ if (!src.includes('const _kitDone=') && sessionsModule.includes('compact_boundar
     assert.ok(ws > 0 && we > ws, 'wait rows: patched loop not found in the bundle');
     const loop = src.slice(ws, we);
     const fold = loop.match(/if\(!(\w+)\(/)[1];
-    const waitRun = new Function('e', `const t=[],n=new Map,i=new Map,d=new Map,u=false,p=new Set,`
-      + `eN=new WeakMap,${fold}=()=>false;`
-      + loop.replace(/if\(!\w+\([^{]*$/, '') + `t.push({fellThrough:m.kind,content:m.content});}return t;`);
+    // The loop reads lookup maps and a projection cache declared above it, under
+    // names the minifier picks per release. Rather than name them, retry with
+    // each name the engine reports as undefined declared as an empty Map.
+    const code = loop.replace(/if\(!\w+\([^{]*$/, '') + `t.push({fellThrough:m.kind,content:m.content});}return t;`;
+    const stubs = new Set([fold]);
+    const build = () => new Function('e', `const t=[],u=false,p=new Set;`
+      + [...stubs].map((n) => n === fold ? `const ${n}=()=>false;` : `const ${n}=new Map;`).join('') + code);
+    const waitRun = (rows) => {
+      for (let tries = 0; ; tries += 1) {
+        try { return build()(rows); } catch (error) {
+          const name = error instanceof ReferenceError && /^(\w+) is not defined$/.exec(error.message)?.[1];
+          if (!name || tries > 20) throw error;
+          stubs.add(name);
+        }
+      }
+    };
     let w = waitRun([
       { kind: 'text', role: 'assistant', content: 'Waiting (old)', wait: { phase: 'holding' } },
       { kind: 'text', role: 'assistant', content: 'Waiting (new)', wait: { phase: 'started' } },

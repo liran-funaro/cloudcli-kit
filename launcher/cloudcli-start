@@ -2135,13 +2135,12 @@ WAIT = [
     ('waiting ceiling',
      'const BG_WAIT_CEILING_MS = 30 * 60 * 1000;\n',
      'const BG_WAIT_CEILING_MS = 30 * 60 * 1000;\n' + WAIT_BLOCK, 1),
+    # 1.37.6 builds the env in buildClaudeSdkEnv() (claudecodeui#1647).
     ('waiting env',
-     '    sdkOptions.env = { ...process.env, '
-     'CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_CEILING_MS) };\n',
-     '    // KIT: the CLI is given the outer bound, so the per-run figure the\n'
-     '    // server computes below is always the one that decides.\n'
-     '    sdkOptions.env = { ...process.env, '
-     'CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(KIT_WAIT_CEILING_MAX_MS) };\n', 1),
+     '        CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_CEILING_MS),\n',
+     '        // KIT: the CLI is given the outer bound, so the per-run figure the\n'
+     '        // server computes below is always the one that decides.\n'
+     '        CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(KIT_WAIT_CEILING_MAX_MS),\n', 1),
     ('waiting state',
      '    let heldForBackgroundWork = false;\n',
      '    let heldForBackgroundWork = false;\n' + WAIT_STATE, 1),
@@ -2284,9 +2283,9 @@ RUNTIME = [
      SESSION_MAP,
      STEER_BLOCK + SESSION_MAP, 1),
     ('steering queue',                  # a queue on the stream the turn rides in on
-     '    let release;\n'
+     '    let release = () => { };\n'
      '    const held = new Promise((resolve) => { release = resolve; });\n',
-     '    let release;\n'
+     '    let release = () => { };\n'
      '    let released = false;\n'
      '    const held = new Promise((resolve) => '
      '{ release = () => { released = true; resolve(); }; });\n'
@@ -2634,16 +2633,17 @@ if homed is not None:
 # compaction -- /compact -- would otherwise fall back to the result's bill,
 # which sums the summarising call and is a much larger wrong number.
 COMPACT_READING = [
+    # 1.37.6 (claudecodeui#1600) reads it through a local named `message`.
     ('counter after compaction',
-     "    if (sdkMessage.type !== 'assistant') {\n",
+     "    if (message.type !== 'assistant') {\n",
      "    // KIT: a compaction's own account of the context it left behind.\n"
-     "    if (sdkMessage.type === 'system' && sdkMessage.subtype === 'compact_boundary') {\n"
-     "        const kitMeta = sdkMessage.compact_metadata ?? sdkMessage.compactMetadata;\n"
+     "    if (message.type === 'system' && message.subtype === 'compact_boundary') {\n"
+     "        const kitMeta = message.compact_metadata ?? message.compactMetadata;\n"
      "        const kitPost = readNumber(kitMeta?.post_tokens ?? kitMeta?.postTokens);\n"
      "        return kitPost > 0 ? buildTokenBudget({ input_tokens: kitPost, cache_creation_input_tokens: 0,\n"
      "            cache_read_input_tokens: 0, output_tokens: 0 }, reportedContextWindow) : null;\n"
      "    }\n"
-     "    if (sdkMessage.type !== 'assistant') {\n",
+     "    if (message.type !== 'assistant') {\n",
      1),
     ('counter after compaction holds',
      "                if (message.type === 'assistant') {\n"

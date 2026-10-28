@@ -67,11 +67,31 @@ merge *plus* a vite + tsc build with two native modules.)
 | **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
-Written against **CloudCLI 1.37.5** and **Claude Code 2.1.302** (first written against 1.37.3). The bundle and server patches
+Written against **CloudCLI 1.37.6** and **Claude Code 2.1.311** (first written against 1.37.3). The bundle and server patches
 are anchored on text upstream chose, so a later release can move an anchor: the launcher then
 reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
 untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
 CloudCLI; it patches the installed package in place, on every start.
+
+## Upgrading to 1.37.6
+
+1.37.6 moved `claude-runtime.provider` to TypeScript ([#1600](https://github.com/siteboon/claudecodeui/pull/1600)),
+so the compiled file it ships is laid out differently, and three runtime anchors moved with it.
+Each was re-anchored; none of them changed what it does:
+
+| Patch | Why it moved |
+|---|---|
+| Waiting env | The SDK's env is built in `buildClaudeSdkEnv()` now ([#1647](https://github.com/siteboon/claudecodeui/pull/1647)); the kit's ceiling replaces the one in its return value |
+| Counter after compaction | The token reader goes through a local named `message`, not `sdkMessage` |
+| Steering queue | The held prompt stream starts with `let release = () => { };` |
+
+Three checks were updated as well:
+- `conversation-click-check` and `rows-check` now read the minifier's names off the bundle,
+  where they had them written down for 1.37.5.
+- `autonomy-check` stubs the scheduled-messages import that [#1613](https://github.com/siteboon/claudecodeui/pull/1613)
+  added to the dispatcher, and loads the real shared `utils.js`.
+
+The startup report is the same as on 1.37.5: frontend 18/19, every chat patch applied, anchors 5/5.
 
 ## Upgrading to 1.37.5
 

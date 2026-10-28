@@ -10,9 +10,14 @@ import fs from 'node:fs'; import assert from 'node:assert/strict';
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const start = src.indexOf('onConversationResultClick:(');
 const body = src.slice(start + 'onConversationResultClick:'.length, src.indexOf('},onRefresh:', start) + 1);
-// the closure's free names: projects (e), sorted sessions (wt), selectProject (yt), selectSession (Ke)
+// The closure's free names -- projects, the sorted-sessions helper, selectProject,
+// selectSession -- are whatever the minifier chose this release, so they are read
+// off the handler rather than written down.
+const names = body.match(/=\(\w+\?(\w+)\.find\(\w+=>\w+\.projectId===\w+\):null\)\|\|\1\.find\(_kitOwnsIt=>(\w+)\(_kitOwnsIt\)/);
+const calls = body.match(/if\(\w+\)\{(\w+)\(\w+\);const \w+=\w+\(\w+\)\.find\([^)]*\);(\w+)\(/);
+assert.ok(names && calls, 'the handler no longer has the shape this check reads');
 const picked = [];
-const make = new Function('e', 'wt', 'yt', 'Ke', `return ${body}`);
+const make = new Function(names[1], names[2], calls[1], calls[2], `return ${body}`);
 const projects = [
   { projectId: 'repo', sessions: [{ id: 'main-s', summary: 'Main work' }, { id: 'wt-s', summary: 'Worktree work', worktree: '.wt-1' }] },
   { projectId: 'other', sessions: [{ id: 'o-s', summary: 'Other' }] },
