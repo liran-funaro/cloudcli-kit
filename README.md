@@ -1107,6 +1107,28 @@ carried-in history first, an ordinary transcript that must not be re-read, a dot
 recovered with its dot intact, a directory matching nothing that must keep the first `cwd`, and a
 transcript with no `cwd` at all, which is not a session.
 
+## A session's title, the one the CLI writes
+
+A session started in the app is named from the first four words of its first message. The CLI
+names it better: it writes an `ai-title` line into the transcript, and re-writes it as the
+conversation moves on. That is the title the VS Code extension shows. Upstream reads `ai-title`,
+but only for a session that has no name yet, and an app-created session always has one: the
+placeholder. So the AI title never reached the sidebar.
+
+Now a name the app **generated** gives way to the transcript's title, and follows it when the CLI
+re-titles the session. A name someone **typed** never does: a rename in the UI is stored in the
+database and nowhere in the transcript, so the transcript has no say over it. "Generated" is told
+apart without a column of its own. It is the name the app would build from this session's first
+prompt, or the title the synchronizer itself set last time. A `/rename` in the CLI outranks the AI
+title, as upstream ranks them. Only the end of the transcript is read (256 KB), since the newest
+title is there and a long transcript is rewritten on every turn.
+
+Sessions renamed by hand before this landed keep their names. It applies from the next
+transcript write of each session, so an old session whose name is still its placeholder picks up
+its title the next time it is used. `launcher/session-title-check.mjs` drives the patched
+synchronizer over seven transcripts: a placeholder replaced, then re-titled, a typed name kept, a
+UI rename after titling kept, a CLI `/rename`, no title yet, and a first prompt with an image.
+
 ## Autonomous sessions, which survive the server
 
 ```bash

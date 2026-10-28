@@ -3669,8 +3669,119 @@ NEW = """        if (!parsed) {
 assert s.count(OLD) == 1, 'processSessionFile anchor'
 s = s.replace(OLD, NEW, 1)
 
+# The title. A session created in the app is named from the first words of its
+# first message, and that placeholder is a name, so the synchronizer never asks
+# the transcript for a better one -- while the CLI writes one: an `ai-title`
+# line it re-writes as the conversation moves on, the same title the VS Code
+# extension shows. A name the app generated is replaced by the transcript's
+# title; a name someone typed (a rename here, `/rename` in the CLI) never is.
+# Generated is told apart without a column of its own: it is the name the app
+# would build from this session's first prompt, or one that was already the
+# transcript's title the last time it was read.
+TITLE_HELPERS = '''
+// KIT: the title the CLI wrote for a session, read from the end of its
+// transcript: it re-writes `ai-title` as the conversation moves on, so the
+// newest one is near the end, and a long transcript is not read in full on
+// every write. A `custom-title` (a `/rename`) beats it, as upstream ranks them.
+const KIT_TITLE_TAIL = 256 * 1024;
+async function kitTranscriptTitles(filePath, sessionId) {
+    let text;
+    try {
+        const fs = process.getBuiltinModule('fs');
+        const handle = await fs.promises.open(filePath, 'r');
+        try {
+            const { size } = await handle.stat();
+            const start = Math.max(0, size - KIT_TITLE_TAIL);
+            const buffer = Buffer.alloc(size - start);
+            await handle.read(buffer, 0, buffer.length, start);
+            text = buffer.toString('utf8');
+        }
+        finally {
+            await handle.close();
+        }
+    }
+    catch {
+        return {};
+    }
+    const found = {};
+    for (const line of text.split(/\\r?\\n/)) {
+        if (!line.includes('-title"')) {
+            continue;
+        }
+        let data;
+        try {
+            data = JSON.parse(line);
+        }
+        catch {
+            continue;
+        }
+        if (data.sessionId !== sessionId) {
+            continue;
+        }
+        if (data.type === 'custom-title' && typeof data.customTitle === 'string' && data.customTitle.trim()) {
+            found.custom = data.customTitle.trim();
+        }
+        else if (data.type === 'ai-title' && typeof data.aiTitle === 'string' && data.aiTitle.trim()) {
+            found.ai = data.aiTitle.trim();
+        }
+    }
+    return found;
+}
+// KIT: the name the app gives a session it creates, as sessions.service builds
+// it from the first message: its first four words.
+function kitPlaceholderName(prompt) {
+    const words = String(prompt ?? '').trim().split(/\\s+/).filter(Boolean);
+    return words.slice(0, 4).join(' ') || 'Untitled Session';
+}
+// KIT: the first prompt a transcript records, for telling the placeholder apart.
+async function kitFirstPrompt(filePath) {
+    const first = await extractFirstValidJsonlData(filePath, (raw) => {
+        const content = raw?.type === 'user' && !raw.isMeta ? raw.message?.content : undefined;
+        if (typeof content === 'string' && content.trim()) {
+            return content;
+        }
+        const text = Array.isArray(content) ? content.find((block) => block?.type === 'text')?.text : undefined;
+        return typeof text === 'string' && text.trim() ? text : null;
+    });
+    return first ?? '';
+}
+// KIT: the last title each session was given from its transcript, so a name it
+// still carries can be told from one someone has typed since. In memory only:
+// after a restart a name is judged against the first prompt alone.
+const kitTitledAs = new Map();
+'''
+s = s.replace(IMPORT, IMPORT + TITLE_HELPERS, 1)
+
+OLD_NAME = '''        const existingSessionName = existingSession?.custom_name;
+        if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {'''
+NEW_NAME = '''        const existingSessionName = existingSession?.custom_name;
+        // KIT: a name the app generated gives way to the title the CLI wrote.
+        if (existingSession && existingSessionName && existingSessionName !== 'Untitled Claude Session') {
+            const kitTitles = await kitTranscriptTitles(filePath, parsed.sessionId);
+            const kitTitle = kitTitles.custom ?? kitTitles.ai;
+            if (kitTitle && kitTitle !== existingSessionName) {
+                // Only a name nobody typed: a rename in the UI is stored here and
+                // nowhere in the transcript, so a `/rename` the transcript still
+                // carries must not undo it.
+                const kitGenerated = kitTitledAs.get(existingSession.session_id) === existingSessionName
+                    || existingSessionName === kitPlaceholderName(await kitFirstPrompt(filePath));
+                if (kitGenerated) {
+                    sessionsDb.updateSessionCustomName(existingSession.session_id, kitTitle);
+                    kitTitledAs.set(existingSession.session_id, kitTitle);
+                    return { ...parsed, sessionName: kitTitle };
+                }
+            }
+            else if (kitTitle) {
+                kitTitledAs.set(existingSession.session_id, kitTitle);
+            }
+        }
+        if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {'''
+assert s.count(OLD_NAME) == 1, 'existing name anchor'
+s = s.replace(OLD_NAME, NEW_NAME, 1)
+
 open(path, 'w').write(s)
 print('session cwd: applied')
+print('session titles: applied')
 SYNCPY
   then
     if node --check "$SYNC" >/dev/null 2>&1; then
