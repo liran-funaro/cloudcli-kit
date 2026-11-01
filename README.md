@@ -67,11 +67,29 @@ merge *plus* a vite + tsc build with two native modules.)
 | **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
-Written against **CloudCLI 1.37.6** and **Claude Code 2.1.311** (first written against 1.37.3). The bundle and server patches
+Written against **CloudCLI 1.37.7** and **Claude Code 2.1.311** (first written against 1.37.3). The bundle and server patches
 are anchored on text upstream chose, so a later release can move an anchor: the launcher then
 reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
 untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
 CloudCLI; it patches the installed package in place, on every start.
+
+## Upgrading to 1.37.7
+
+One anchor moved. [#1693](https://github.com/siteboon/claudecodeui/pull/1693) lets you rename a session
+by double-clicking its title, which puts an `onDoubleClick` on the desktop sidebar row between its
+title and its children. The worktree badge and the autonomy chip are one patch on that row and its
+mobile twin, so the pattern now allows an optional handler there and carries it through untouched.
+Double-click renaming still works beside the badge.
+
+Upstream changes worth knowing about:
+
+- [#1677](https://github.com/siteboon/claudecodeui/pull/1677) labels SDK sessions
+  `CLAUDE_CODE_ENTRYPOINT=claudecodeui`. The terminal guard is unaffected: it tells the server's
+  own CLI processes apart by ancestry, not by that label.
+- [#1698](https://github.com/siteboon/claudecodeui/pull/1698) moves OpenCode onto its SDK. The kit
+  patches nothing of OpenCode's.
+
+The startup report is the same as on 1.37.6: frontend 18/19, every chat patch applied, anchors 5/5.
 
 ## Upgrading to 1.37.6
 

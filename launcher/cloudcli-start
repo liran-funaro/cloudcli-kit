@@ -855,8 +855,12 @@ KIT_AUT_HELPERS = (
 )
 
 VIEW = re.compile(r'messageCount:Number\((\w+)\.messageCount\|\|0\)\}')
+# 1.37.7 (claudecodeui#1693) gives the desktop row an onDoubleClick for renaming,
+# between the title and the children; the mobile row has none. Either is matched,
+# and the handler is carried through untouched.
 ROW = re.compile(r'(\w+)\.jsx\("div",\{className:"min-w-0 flex-1 truncate text-sm '
                  r'font-normal text-foreground",title:(\w+)\.sessionName,'
+                 r'((?:onDoubleClick:\w+=>\{[^{}]*\},)?)'
                  r'children:\2\.sessionName\}\)')
 counts = (len(VIEW.findall(s)), len(ROW.findall(s)))
 if '_kitWorktree' in s:
@@ -865,7 +869,7 @@ elif counts == (1, 2):
     s = VIEW.sub(lambda m: 'messageCount:Number(%s.messageCount||0),'
                  '_kitWorktree:%s.worktree||""}' % (m.group(1), m.group(1)), s, count=1)
     s = ROW.sub(lambda m: '%s.jsx("div",{className:"min-w-0 flex-1 truncate text-sm '
-                'font-normal text-foreground",title:%s.sessionName,children:%s.sessionName}),'
+                'font-normal text-foreground",title:%s.sessionName,%schildren:%s.sessionName}),'
                 '%s._kitWorktree&&%s.jsx("span",{className:"flex-shrink-0 font-mono '
                 'text-[10px] text-muted-foreground/70",title:"worktree "+%s._kitWorktree,'
                 'children:%s._kitWorktree}),'
@@ -877,7 +881,7 @@ elif counts == (1, 2):
                 'text-muted-foreground/80","data-kit-aut":%s.id,'
                 'onClick:_ev=>kitAutToggle(_ev,%s.id),'
                 'ref:_e=>{if(!_e)return;kitAutPoll();kitAutDraw(_e)}})'
-                % (m.group(1), m.group(2), m.group(2), m.group(2), m.group(1),
+                % (m.group(1), m.group(2), m.group(3), m.group(2), m.group(2), m.group(1),
                    m.group(2), m.group(2), m.group(1), m.group(2), m.group(2)),
                 s, count=2)
     applied.append('worktree badge')
