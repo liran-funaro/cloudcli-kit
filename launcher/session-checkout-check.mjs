@@ -23,4 +23,16 @@ assert.equal(pick(null, { worktree: '.wt-2' }), null);
 const body = src.slice(j, src.indexOf('function ', j + 20));
 assert.ok(!/\b_kitRepo\b/.test(body), 'nothing downstream reads the repository');
 for (const k of ['selectedProject:e,onFileOpen:', 'project:e,session:t,', 'selectedProject:e,isMobile:', 'projectPath:e.path', 'selectedProject:e,selectedSession:t,shouldShowTasksTab']) assert.ok(body.includes(k), k);
+// The live broadcast folds a bare project (no checkout list) into the open one.
+// That must not wipe the list, or the swap above stops matching and the header
+// falls back to the repository's name a moment after the session opens.
+const m = src.match(/function (\w+)\((\w+),(\w+)\)\{if\(\2\.projectId!==\3\.projectId\)return \2;[^}]*?_kitWorktrees[\s\S]*?\}\}/);
+assert.ok(m, 'project merge');
+const merge = new Function('nXe', 'oo', `${m[0]}; return ${m[1]};`)(
+  (x, y) => Object.is(x, y) || JSON.stringify(x) === JSON.stringify(y), (x) => JSON.stringify(x ?? null));
+const bare = { projectId: 'R', path: '/w/repo', fullPath: '/w/repo', displayName: 'repo', isStarred: false };
+assert.deepEqual(merge(repo, bare)._kitWorktrees, repo._kitWorktrees, 'a bare broadcast keeps the checkouts');
+assert.equal(pick(merge(repo, bare), { id: 's', worktree: '.wt-2' }).displayName, 'repo.wt-2');
+const fresh = [repo._kitWorktrees[0]];
+assert.deepEqual(merge(repo, { ...bare, _kitWorktrees: fresh })._kitWorktrees, fresh, 'a refreshed list still replaces it');
 console.log('session checkout: ok');

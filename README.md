@@ -1091,8 +1091,12 @@ editor, Shell and Source Control used to be handed the open project, the reposit
 status showed the main checkout's branch and opening a file the tree listed from the worktree
 failed with "Path must be under project root". Each checkout in the folded row now carries
 its own project id, and the workspace swaps it in once, at the top, when the open session
-lives in a worktree; the header then names `repo.wt-1`. `launcher/session-checkout-check.mjs`
-checks that nothing downstream still reads the repository. The click also falls
+lives in a worktree; the header then names `repo.wt-1`. The live update that follows a
+session opening carries a bare project with no checkout list, and folding it into the open one
+used to drop the list. The swap then found no worktree and the header fell back to `repo`
+about a second later. Only a row that carries the list replaces it now.
+`launcher/session-checkout-check.mjs` checks both: nothing downstream still reads the
+repository, and a bare update keeps the checkouts. The click also falls
 back to the project whose sessions hold the id, so a row the feed got wrong still opens with its
 title and worktree badge. Only what is *shown* was wrong: a resumed session already ran in its
 own worktree, because the server takes the directory from the session row (patch 22).

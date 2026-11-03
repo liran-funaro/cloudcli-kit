@@ -1147,14 +1147,17 @@ elif PANE_PROJECT and counts == [1, 1, 1, 1]:
         # ... and the refresh has to reach the open project. Upstream folds a
         # fresh row into the selected one field by field, and the checkout list
         # is not one of its fields, so the picker kept the list it mounted with.
+        # Only a row that carries the list replaces it: the live broadcast folds
+        # its bare project into the open one too, and taking its missing list
+        # dropped a worktree session's header back to the repository's name.
         MERGE = re.compile(r'function (\w+)\((\w+),(\w+)\)\{if\(\2\.projectId!==\3\.projectId\)return \2;'
                            r'([^}]*?)return \2\.displayName===\3\.displayName&&')
         if len(MERGE.findall(s)) == 1:
             s = MERGE.sub(lambda m: 'function %s(%s,%s){if(%s.projectId!==%s.projectId)return %s;'
-                          '%sif(JSON.stringify(%s._kitWorktrees||[])!==JSON.stringify(%s._kitWorktrees||[]))'
+                          '%sif(%s._kitWorktrees&&JSON.stringify(%s._kitWorktrees||[])!==JSON.stringify(%s._kitWorktrees))'
                           '%s={...%s,_kitWorktrees:%s._kitWorktrees};return %s.displayName===%s.displayName&&'
                           % (m.group(1), m.group(2), m.group(3), m.group(2), m.group(3), m.group(2),
-                             m.group(4), m.group(2), m.group(3), m.group(2), m.group(2), m.group(3),
+                             m.group(4), m.group(3), m.group(2), m.group(3), m.group(2), m.group(2), m.group(3),
                              m.group(2), m.group(3)), s, count=1)
             # The list is only swapped for the fresh one when a field upstream
             # compares has changed; the checkouts have to be one of them.
