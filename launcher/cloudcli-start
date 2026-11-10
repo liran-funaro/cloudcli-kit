@@ -8,13 +8,13 @@
 #       untouched; the browser picks the changes up on its next reload.
 #
 #   CLOUDCLI_STEER=0 cloudcli-start
-#       Turn off steering (patch 5), which is otherwise ON: a message sent
-#       while a turn is running goes INTO that turn instead of being held back
-#       as a draft, and is recorded in the CLI transcript so it survives a
-#       reload. Off reverses all eight server edits, back to byte-identical
-#       with what upstream shipped.
+#       Turn off patch 5, which is otherwise ON: Enter during a running turn
+#       steers it (upstream's own steer, which upstream offers only from the
+#       send menu), and a message sent while a finished turn is held for its
+#       background work goes into that same process instead of killing it.
+#       Off reverses the server edits, back to byte-identical with upstream.
 #       In a tab that is already open, `__cloudcliSteer = false` in the console
-#       restores upstream's hold-it-back composer without a restart.
+#       puts Enter back on upstream's queue without a restart.
 #
 #   CLOUDCLI_LINKS=0 cloudcli-start
 #       Turn off clickable file paths (patch 11), which are otherwise ON: a path
@@ -258,29 +258,64 @@ if s.count(SEND) == 1:
 else:
     missing.append('ctrl+enter to send (%d matches)' % s.count(SEND))
 
-# (5) Send-while-running, with CLOUDCLI_STEER=1 -- the browser half of patch 5.
-# Type into a turn that is still running and upstream holds the text back as a
-# draft, replaying it only once the turn ends; the server patch can instead push
-# it into the live turn, so a correction lands while it still matters. What that
-# takes here is letting the composer's busy branch fall through to the ordinary
-# send path -- which appends the bubble, clears the box and emits chat.send, all
-# of it already correct for a run in progress.
+# (5) Enter steers, with CLOUDCLI_STEER=1 -- the browser half of patch 5.
+# 1.37.8 steers a message into the running turn itself (claudecodeui#1760), but
+# only from the send menu: Enter during a turn still queues the text until the
+# turn ends. The kit made Enter steer before upstream could, so it keeps that
+# default and rides upstream's path: the composer's steer test also passes for
+# a plain send. An explicit menu choice (Queue) still wins, and a slash command
+# or a provider that cannot steer queues exactly as upstream does.
 #
 # Guarded on a global rather than compiled in, so the tab keeps an escape
-# hatch: `__cloudcliSteer = false` in the console restores upstream's
-# hold-it-back composer mid-session, with no reload. Only that exact value
-# does -- unset means steer, matching the server half, which is on unless
-# CLOUDCLI_STEER=0. Matched structurally: the busy flag, the override argument
-# and the queue setter are all one-letter minifier names that an upgrade will
-# renumber, but the shape holds.
+# hatch: `__cloudcliSteer = false` in the console puts Enter back on upstream's
+# queue mid-session, with no reload. The option bag is a minifier name an
+# upgrade will renumber, so it is read off the steer test itself.
 if steer:
-    BUSY = re.compile(r'if\((\w+)\)\{if\((\w+)\)\{(\w+)\.current=(\w+),(\w+)\(\2\);return\}')
-    if len(BUSY.findall(s)) == 1:
-        s = BUSY.sub(r'if(\1&&window.__cloudcliSteer===!1){if(\2){\3.current=\4,\5(\2);'
-                     r'return}', s, count=1)
-        applied.append('send while running')
+    STEER_TEST = re.compile(r'(\w+)\?\.steerIntoTurn===!0&&')
+    if len(STEER_TEST.findall(s)) == 1:
+        s = STEER_TEST.sub(lambda m: '(%s?.steerIntoTurn===!0||!%s?.presetBackgroundChoice&&!%s?.kitQueue'
+                           '&&window.__cloudcliSteer!==!1)&&' % (m.group(1), m.group(1), m.group(1)), s, count=1)
+        applied.append('enter steers')
     else:
-        missing.append('send while running (%d matches)' % len(BUSY.findall(s)))
+        missing.append('enter steers (%d matches)' % len(STEER_TEST.findall(s)))
+
+# ... and the send menu says so. Upstream puts the send key's label (Cmd+Enter
+# with ctrl+enter to send) on Queue, which is what that key does upstream; here
+# it steers, so the label moves to Steer. On a Mac, Ctrl+Enter is free beside it
+# and becomes Queue -- the key handler tags that send, and the steer test above
+# lets a tagged send queue. Elsewhere Ctrl IS the send key, so Queue stays a
+# menu choice. All three names are read off the sites themselves.
+if steer:
+    KEYS = re.compile(r'(\w+)\.key==="Enter"&&\(\(\1\.ctrlKey\|\|\1\.metaKey\)&&!\1\.shiftKey'
+                      r'\|\|!\1\.shiftKey&&!\1\.ctrlKey&&!\1\.metaKey&&!\w+&&!\w+\(\)\)'
+                      r'&&\(\1\.preventDefault\(\),(\w+)\(\1\)\)')
+    MENU = re.compile(r'function \w+\(\{state:(\w+),hasInput:\w+,hasText:\w+=\w+,'
+                      r'supportsSideQuestions:\w+=!1,supportsSteering:(\w+)=!1')
+    LABEL = re.compile(r'(\w+)=(\w+)==="responding"\?\w+\?(\w+)\?"⌘↵":"Ctrl\+↵":"↵":null')
+    QITEM = re.compile(r'trailing:(\w+)\?(\w+)\.jsx\((\$?\w+),\{children:\1\}\):void 0,'
+                       r'onSelect:\(\)=>(\w+)\("queue"\)')
+    SITEM = re.compile(r'(description:\w+\("sendMenu\.steer\.description",\{[^}]*\}\),)'
+                       r'(onSelect:\(\)=>\w+\("steer"\))')
+    found = [len(p.findall(s)) for p in (KEYS, MENU, LABEL, QITEM, SITEM)]
+    if found == [1, 1, 1, 1, 1]:
+        state, can = MENU.search(s).groups()
+        key, _, mac = LABEL.search(s).groups()
+        q = QITEM.search(s)
+        assert q.group(1) == key, 'the queue item no longer shows the send key'
+        jsx, kbd = q.group(2), q.group(3)
+        s = KEYS.sub(lambda m: m.group(0)[:-len('%s(%s))' % (m.group(2), m.group(1)))]
+                     + '%s(%s,void 0,/Mac|iPhone|iPad/.test(navigator.platform)&&%s.ctrlKey'
+                       '&&!%s.metaKey?{kitQueue:!0}:void 0))'
+                     % (m.group(2), m.group(1), m.group(1), m.group(1)), s, count=1)
+        steering = '%s&&window.__cloudcliSteer!==!1' % can
+        qkey = '(%s?(%s==="responding"&&%s?"⌃↵":null):%s)' % (steering, state, mac, key)
+        s = QITEM.sub(lambda m: 'trailing:%s?%s.jsx(%s,{children:%s}):void 0,onSelect:()=>%s("queue")'
+                      % (qkey, jsx, kbd, qkey, m.group(4)), s, count=1)
+        s = SITEM.sub(lambda m: '%strailing:%s&&%s?%s.jsx(%s,{children:%s}):void 0,%s'
+                      % (m.group(1), steering, key, jsx, kbd, key, m.group(2)), s, count=1)
+        applied.append('steer menu keys')
+    else:
+        missing.append('steer menu keys (%s matches)' % '/'.join(map(str, found)))
 
 # Several patches below are anchored on names the minifier chose, which are
 # stable only within a release. Each is read from a site that says which is
@@ -1575,30 +1610,19 @@ fi
 # seconds, then close the transport instead -- which needs no cooperation from
 # the child.
 #
-# Patch 5 (CLOUDCLI_STEER=1) rides that same open stdin. 1.37.2 sends every turn
-# as a stream that parks when it runs out of messages (createHeldPromptStream),
-# precisely so the pipe stays open. A user frame pushed into the park is read at
-# the CLI's next agent-loop boundary, in the SAME turn -- so a message typed
-# mid-run steers the run instead of queueing behind it. All this patch adds is a
-# queue on that park and a route to reach it; nothing about how a turn is
-# started has to change, which is what makes it small.
-#
-# (Before 1.37.2 the same trick hung off the SDK's string-prompt path, which
-# left stdin open by omission, and only for turns without attachments. Upstream
-# now holds it open on purpose, for every turn, and releases it on purpose --
-# so steering follows a lifetime the server states rather than one it inferred,
-# and a push after the release is refused rather than dropped into a closed
-# pipe.)
-#
-# The CLI applies such a frame but never writes it down, and CloudCLI's history
-# IS the CLI's transcript -- so patch 5 also appends the line there itself, in
-# the shape a user turn has. Without that the message vanishes on the next
-# reload, and the CLI resumes a conversation with no record of the redirection.
+# Patch 5 (CLOUDCLI_STEER=1) rides that same open stdin. Every turn is sent as a
+# stream that parks when it runs out of messages (createHeldPromptStream),
+# precisely so the pipe stays open, and since 1.37.8 that stream hands out a
+# push: upstream steers a running turn through it (claudecodeui#1760), which is
+# what the kit used to add itself. What the kit keeps is the other use of the
+# same push -- a message sent while a FINISHED turn is held for its background
+# work goes into that process (patch 10) rather than a new run that would kill
+# the work -- plus Enter steering by default, the browser half below.
 #
 # Patch 5 is all-or-nothing across the three files by construction: a facade
 # naming a function that failed to be inserted is a ReferenceError at import,
 # i.e. a server that does not start. And every edit it makes is REVERSED when
-# the flag is off, so the flag is the whole switch -- turning steering off is a
+# the flag is off, so the flag is the whole switch -- turning it off is a
 # restart, not a reinstall.
 RTP="$PKG/dist-server/server/modules/providers/list/claude/claude-runtime.provider.js"
 PRS="$PKG/dist-server/server/modules/providers/services/provider-runtime.service.js"
@@ -1691,136 +1715,14 @@ STOP = (                                                  # (old, new, label)
 # --- patch 5 ----------------------------------------------------------------
 # Raw: this is JS source, so a backslash in it belongs to the JS ('\n' is a
 # newline the emitted code writes, not one in this string).
-STEER_BLOCK = r'''// KIT: mid-turn steering -----------------------------------------------------
+STEER_BLOCK = r'''// KIT: the held run's stdin ----------------------------------------------------
 // Every turn is sent as a stream that parks once its messages are out, so the
-// CLI's stdin stays open for as long as the run does. A user frame pushed into
-// that park is read at the next agent-loop boundary -- the same turn, no
-// restart, no resume. createHeldPromptStream hands out the push per run; it
-// refuses once that run's stream has been released, so nothing is ever written
-// into a closed pipe.
+// CLI's stdin stays open for as long as the run does, and upstream's stream
+// hands out a push that refuses once it has been released. Upstream uses it to
+// steer a running turn; the kit uses the same push to take a message into a
+// run whose turn is over but whose process is held for its background work.
 const kitPushers = new WeakMap(); // run -> push a frame onto its held stdin
 const kitResumers = new WeakMap(); // run -> take a message into its held wait
-/**
- * KIT: writes a steered line into the CLI's own transcript.
- *
- * The CLI applies a mid-turn frame to the run in flight but records nothing, so
- * after a reload the message is simply gone -- CloudCLI reads its history from
- * that transcript and there is no second copy anywhere. Append it in the shape
- * the CLI writes for a user turn, chained onto the newest entry: the reader
- * takes it for a normal user message, and the CLI replays it on the next resume
- * rather than continuing a conversation it has no record of being redirected.
- * @param {string} sessionId - Session identifier
- * @param {string} text - What was said to the run
- * @param {string} timestamp - When it was said, ISO 8601, for history ordering
- * @returns {Promise<void>} Resolves once the line is on disk
- */
-async function kitRecordSteer(sessionId, text, timestamp) {
-    const jsonlPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
-    if (!jsonlPath) {
-        return;
-    }
-    // Only the tail is wanted: these transcripts reach tens of megabytes, and
-    // all that is needed from one is an entry to hang the new line off.
-    const handle = await fs.open(jsonlPath, 'r');
-    let tail = '';
-    let start = 0;
-    try {
-        const { size } = await handle.stat();
-        start = Math.max(0, size - 65536);
-        if (size > start) {
-            const buffer = Buffer.alloc(size - start);
-            await handle.read(buffer, 0, buffer.length, start);
-            tail = buffer.toString('utf8');
-        }
-    }
-    finally {
-        await handle.close();
-    }
-    const lines = tail.split('\n');
-    if (start > 0) {
-        lines.shift();              // the read began mid-line
-    }
-    let base = null;
-    for (let index = lines.length - 1; index >= 0 && !base; index--) {
-        const line = lines[index].trim();
-        if (!line) {
-            continue;
-        }
-        try {
-            const entry = JSON.parse(line);
-            if (entry?.uuid && entry.sessionId) {
-                base = entry;       // the newest entry that can be a parent
-            }
-        }
-        catch {
-            // A line still being written. The one before it will do.
-        }
-    }
-    if (!base) {
-        return;
-    }
-    // sessionId here is CloudCLI's; the transcript is keyed by the CLI's own,
-    // which is what the reader filters on -- so take that from the file.
-    const record = {
-        parentUuid: base.uuid,
-        isSidechain: false,
-        userType: base.userType || 'external',
-        cwd: base.cwd,
-        sessionId: base.sessionId,
-        version: base.version,
-        gitBranch: base.gitBranch,
-        entrypoint: base.entrypoint,
-        type: 'user',
-        message: { role: 'user', content: [{ type: 'text', text }] },
-        promptSource: 'sdk',
-        promptId: base.promptId || crypto.randomUUID(),
-        uuid: crypto.randomUUID(),
-        timestamp,
-    };
-    // One line, one write: O_APPEND keeps it whole alongside the CLI's own
-    // appends. No trailing newline means the CLI is mid-write, so start one.
-    await fs.appendFile(jsonlPath,
-        (tail.endsWith('\n') ? '' : '\n') + JSON.stringify(record) + '\n');
-}
-/**
- * KIT: hands a user message to a run that is already in flight.
- * @param {string} sessionId - Session identifier
- * @param {string} text - What to say to the run
- * @returns {boolean} True if the CLI has it; false to fall back to refusing
- */
-function injectIntoClaudeSDKSession(sessionId, text) {
-    const session = getSession(sessionId);
-    const instance = session?.instance;
-    if (!instance || session.status !== 'active') {
-        return false;
-    }
-    const push = kitPushers.get(instance);
-    if (!push) {
-        return false;
-    }
-    if (typeof text !== 'string' || !text.trim()) {
-        return false;
-    }
-    const timestamp = new Date().toISOString();
-    // Same shape the turn itself was sent in. A refusal means the run's stdin is
-    // already released -- the CLI is winding down and the frame would go
-    // nowhere, so report failure rather than record a line nothing acted on.
-    if (!push({
-        type: 'user',
-        message: { role: 'user', content: text },
-        parent_tool_use_id: null,
-        timestamp,
-    })) {
-        return false;
-    }
-    console.log(`[KIT] steering ${sessionId} mid-turn (${text.length} chars)`);
-    // Not awaited: the run already has the message, and whether it also ends up
-    // in the history must not decide whether steering reports success.
-    kitRecordSteer(sessionId, text, timestamp).catch((error) => {
-        console.warn(`[KIT] steered line not recorded for ${sessionId}:`, error?.message || error);
-    });
-    return true;
-}
 /**
  * KIT: hands a message to a run whose turn is over but whose process is still
  * held open for its background work -- see patch 10. Returns a promise that
@@ -1867,15 +1769,14 @@ function kitResumeHeldRun(sessionId, text, writer) {
 #                 releases its stdin, taking every background shell and monitor
 #                 with it -- which is why prodding a waiting session was answered
 #                 by "No completion record was found for this background shell
-#                 command from the previous session". Steering already owns the
-#                 pipe this needs, so the resume half rides on patch 5 and is
-#                 gated with it.
+#                 command from the previous session". It pushes onto the held
+#                 stdin through the pusher patch 5 records, so it is gated
+#                 with it.
 #
 # What the CLI does with a frame pushed into a parked stream is not inferred: a
 # probe against 2.1.235 pushed one after the first `result` and the CLI ran it as
-# an ordinary turn, wrote it into its own transcript (unlike a mid-turn steer,
-# which patch 5 has to record itself), and the background shell armed by the turn
-# before it survived and reported back afterwards.
+# an ordinary turn, wrote it into its own transcript, and the background shell
+# armed by the turn before it survived and reported back afterwards.
 WAIT_BLOCK = r'''
 // KIT: the outer bound on a hold, and what the CLI itself is given. Upstream's
 // 30 minutes is a floor: the tools name their own deadlines (a Monitor's
@@ -2018,7 +1919,7 @@ WAIT_TIMER = r'''        idleReleaseTimer = setTimeout(() => {
                     { phase: 'expired', ms: Date.now() - kitHoldStartedAt, tasks: kitTasks }));
                 kitHoldStartedAt = 0;
             }
-            releasePromptStream();
+            maybeReleasePromptStream(true);
         }, kitCeilingMs());
 '''
 
@@ -2103,7 +2004,7 @@ RESUME_CLOSURE = r'''        // KIT: and how a message reaches this run once its
             // The turn this starts belongs to the run that brought the message:
             // report there, and owe it a `complete`. The CLI writes the frame
             // into its transcript itself -- it is parked between turns, not
-            // mid-turn -- so unlike a steer there is nothing to record here.
+            // mid-turn -- so there is nothing to record here.
             if (writer) {
                 kitLive.target = writer;
             }
@@ -2154,7 +2055,7 @@ WAIT = [
     ('waiting expiry',
      '        idleReleaseTimer = setTimeout(() => {\n'
      '            idleReleaseTimer = null;\n'
-     '            releasePromptStream();\n'
+     '            maybeReleasePromptStream(true);\n'
      '        }, BG_WAIT_CEILING_MS);\n',
      WAIT_TIMER, 1),
     ('waiting tasks',
@@ -2167,27 +2068,27 @@ WAIT = [
     # that is left of it is the row that says a hold has begun. Upstream still
     # sends nothing at that moment.
     ('waiting hold',
-     '                if (holdForTurn) {\n'
-     '                    heldForBackgroundWork = true;\n'
-     '                    scheduleRelease();\n'
-     '                }\n',
-     '                if (holdForTurn) {\n'
-     '                    heldForBackgroundWork = true;\n'
-     '                    scheduleRelease();\n'
-     '                    // KIT: and say what is happening. Until this row the UI showed a\n'
-     '                    // finished turn and nothing else, which reads exactly like a\n'
-     '                    // session that stopped.\n'
-     '                    kitHoldStartedAt = Date.now();\n'
-     '                    const kitMs = kitCeilingMs();\n'
-     '                    ws.send(kitWaitRow(capturedSessionId || sessionId || null,\n'
-     '                        kitWaitText(kitTasks, kitMs),\n'
-     '                        {\n'
-     "                            phase: 'holding',\n"
-     '                            ms: kitMs,\n'
-     '                            until: new Date(Date.now() + kitMs).toISOString(),\n'
-     '                            tasks: kitTasks,\n'
-     '                        }));\n'
-     '                }\n',
+     '            if (holdForTurn) {\n'
+     '                heldForBackgroundWork = true;\n'
+     '                scheduleRelease();\n'
+     '            }\n',
+     '            if (holdForTurn) {\n'
+     '                heldForBackgroundWork = true;\n'
+     '                scheduleRelease();\n'
+     '                // KIT: and say what is happening. Until this row the UI showed a\n'
+     '                // finished turn and nothing else, which reads exactly like a\n'
+     '                // session that stopped.\n'
+     '                kitHoldStartedAt = Date.now();\n'
+     '                const kitMs = kitCeilingMs();\n'
+     '                ws.send(kitWaitRow(capturedSessionId || sessionId || null,\n'
+     '                    kitWaitText(kitTasks, kitMs),\n'
+     '                    {\n'
+     "                        phase: 'holding',\n"
+     '                        ms: kitMs,\n'
+     '                        until: new Date(Date.now() + kitMs).toISOString(),\n'
+     '                        tasks: kitTasks,\n'
+     '                    }));\n'
+     '            }\n',
      1),
 ]
 RESUME = [
@@ -2278,57 +2179,13 @@ SESSION_MAP = '/**\n * Adds a session to the active sessions map\n'
 
 # (label, old, new, anchor count) -- run forward with CLOUDCLI_STEER=1 and in
 # reverse without it, so the flag alone decides, in both directions.
-# The models import used to be the anchor here and grew a second name in
-# 1.37.3; the SDK import is the one line this file cannot be without.
-SDK_IMPORT = "import { query } from '@anthropic-ai/claude-agent-sdk';\n"
-DB_IMPORT = "import { sessionsDb } from '../../../../modules/database/index.js';\n"
+# Upstream's own steer (claudecodeui#1760) took over the queue on the park, the
+# route and the transcript write this list used to carry; what is left is the
+# pusher a held run is reached through, and the route to it.
 RUNTIME = [
-    ('steering history',                # kitRecordSteer needs the transcript path
-     SDK_IMPORT,
-     SDK_IMPORT + DB_IMPORT, 1),
     ('steering channel',
      SESSION_MAP,
      STEER_BLOCK + SESSION_MAP, 1),
-    ('steering queue',                  # a queue on the stream the turn rides in on
-     '    let release = () => { };\n'
-     '    const held = new Promise((resolve) => { release = resolve; });\n',
-     '    let release = () => { };\n'
-     '    let released = false;\n'
-     '    const held = new Promise((resolve) => '
-     '{ release = () => { released = true; resolve(); }; });\n'
-     '    // KIT: frames steered in while the stream is parked below. Refused\n'
-     '    // once it has been released: the CLI is winding down by then, and a\n'
-     '    // frame written to it would go into a closed pipe.\n'
-     '    const steered = [];\n'
-     '    let wake = null;\n'
-     '    const push = (message) => {\n'
-     '        if (released) {\n'
-     '            return false;\n'
-     '        }\n'
-     '        steered.push(message);\n'
-     '        wake?.();\n'
-     '        wake = null;\n'
-     '        return true;\n'
-     '    };\n', 1),
-    ('steering park',                   # ... and the park itself passes them on
-     '        await held;\n'
-     '    })();\n'
-     '    return { stream, release };\n',
-     '        // KIT: with nothing steered in this awaits `held` and returns,\n'
-     '        // which is what upstream\'s bare `await held` did. Draining\n'
-     '        // before the check is what keeps a frame pushed in the same tick\n'
-     '        // as the release from being dropped.\n'
-     '        for (;;) {\n'
-     '            while (steered.length) {\n'
-     '                yield steered.shift();\n'
-     '            }\n'
-     '            if (released) {\n'
-     '                return;\n'
-     '            }\n'
-     '            await Promise.race([held, new Promise((resolve) => { wake = resolve; })]);\n'
-     '        }\n'
-     '    })();\n'
-     '    return { stream, release, push };\n', 1),
     ('steering pusher',
      '        // Track the query instance for abort capability\n',
      '        // KIT: the pusher belongs to the stream this run is really\n'
@@ -2343,18 +2200,11 @@ RUNTIME = [
      'export const claudeRuntime = {\n'
      '    run: queryClaudeSDK,\n'
      '    abort: abortClaudeSDKSession,\n'
-     '    inject: injectIntoClaudeSDKSession,\n'
      '    resumeHeld: kitResumeHeldRun,\n', 1),
 ]
 SERVICE = [
     ('steering passthrough',
      '        async abort(providerName, sessionId) {\n',
-     '        // KIT: hand a message to a run already in flight. False means the\n'
-     '        // provider cannot take it, so the caller can refuse the send.\n'
-     '        inject(providerName, sessionId, text) {\n'
-     '            const runtime = dependencies.resolveProvider(providerName).runtime;\n'
-     '            return Boolean(runtime.inject?.(sessionId, text));\n'
-     '        },\n'
      '        // KIT: hand a message to a run whose turn is over but whose\n'
      '        // process is still held for its background work. Null means no\n'
      '        // held run will take it, so the caller starts one as usual.\n'
@@ -2364,23 +2214,7 @@ SERVICE = [
      '        },\n'
      '        async abort(providerName, sessionId) {\n', 1),
 ]
-# 1.37.3 wrapped the refusal in a ws check -- a scheduled send has no socket.
-REFUSE = ('    if (!run) {\n'
-          '        if (ws) {\n'
-          '            sendProtocolError(ws, \'RUN_IN_PROGRESS\', `Session "${sessionId}" '
-          'already has a run in progress.`, sessionId);\n'
-          '        }\n')
 CHAT = [
-    ('steering route',
-     REFUSE,
-     '    if (!run) {\n'
-     '        // KIT: a send while the turn is running is steering, not an error.\n'
-     '        // The history write below belongs to a turn this process owns, so\n'
-     '        // it is not reached; the runtime records the line in the CLI\n'
-     '        // transcript instead, which is where a reload reads it back from.\n'
-     '        if (dependencies.runtime.inject?.(provider, sessionId, typeof data.content === \'string\' ? data.content : \'\')) {\n'
-     '            return;\n'
-     '        }\n' + REFUSE.split('\n', 1)[1], 1),
     ('waiting route',
      '        await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);\n',
      '        // KIT: a message that lands while the previous turn is still held\n'
@@ -2602,13 +2436,27 @@ if pinned is not None:
 # dead path. Spawning there fails with ENOENT, which the SDK reports as a libc
 # mismatch -- "native binary ... exists but failed to launch". So a dead
 # directory is refused with a sentence that says which one, before the spawn.
+# Reads the session row, so the database import comes with it -- it used to ride
+# in on the steering edits, and a resumed run then died on `sessionsDb is not
+# defined` the moment those were retired.
 HOME_CWD = [
+    ('resumed session runs at home: database',
+     "import { query } from '@anthropic-ai/claude-agent-sdk';\n",
+     "import { query } from '@anthropic-ai/claude-agent-sdk';\n"
+     "import { sessionsDb } from '../../../../modules/database/index.js';\n", 1),
     ('resumed session runs at home',
      '    if (cwd) {\n        sdkOptions.cwd = cwd;\n    }\n',
      '    // KIT: a resumed session runs in its own directory, not the one the client names.\n'
      '    let kitCwd = cwd;\n'
      '    if (providerSessionId && !resumeFromScratch) {\n'
-     '        const kitHome = sessionsDb.getSessionByProviderSessionId(providerSessionId)?.project_path;\n'
+     '        // A lookup that fails leaves the run where the client sent it.\n'
+     '        let kitHome = null;\n'
+     '        try {\n'
+     '            kitHome = sessionsDb.getSessionByProviderSessionId(providerSessionId)?.project_path;\n'
+     '        }\n'
+     '        catch (error) {\n'
+     '            console.warn(`[KIT] no session row for ${providerSessionId}: ${error?.message || error}`);\n'
+     '        }\n'
      "        if (kitHome && kitHome !== cwd && process.getBuiltinModule('fs').existsSync(kitHome)) {\n"
      '            console.warn(`[KIT] ${providerSessionId} runs in ${kitHome}, not ${cwd || \'(none)\'} as sent`);\n'
      '            kitCwd = kitHome;\n'

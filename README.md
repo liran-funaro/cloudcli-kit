@@ -67,11 +67,44 @@ merge *plus* a vite + tsc build with two native modules.)
 | **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
-Written against **CloudCLI 1.37.7** and **Claude Code 2.1.311** (first written against 1.37.3). The bundle and server patches
+Written against **CloudCLI 1.37.8** and **Claude Code 2.1.317** (first written against 1.37.3). The bundle and server patches
 are anchored on text upstream chose, so a later release can move an anchor: the launcher then
 reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
 untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
 CloudCLI; it patches the installed package in place, on every start.
+
+## Upgrading to 1.37.8
+
+1.37.8 ships steering itself ([#1760](https://github.com/siteboon/claudecodeui/pull/1760)): a
+`chat.steer` message, a push on the held prompt stream, and a CLI that echoes what it reads, so
+upstream shows a steered line where Claude took it in and keeps it in the history. That is most of
+what patch 5 carried, so most of patch 5 is gone — the queue on the park, the steering route, the
+facade and the transcript write. What is left is the part upstream does not do:
+
+- **Enter steers.** Upstream steers only from the send menu; Enter during a turn still queues. The
+  kit's browser half now rides upstream's steer, so Enter takes upstream's path rather than the
+  kit's own. A Queue picked from the menu still queues.
+- **A message sent during a hold goes into the held process** (patch 10's resume), through the
+  push upstream's stream now hands out.
+
+The same release added `maybeReleasePromptStream` (side questions defer a release) and moved the
+hold decision into `settleTurnResult`. Patch 10's expiry now calls the new release and its hold row
+sits one indent shallower. Two things came loose and were fixed:
+
+- **The resumed-session cwd lost its database import.** It used to arrive with the steering
+  edits, so retiring them left `sessionsDb is not defined` at the first resumed run. Upstream's own
+  `claude-context-window` test caught it, and the patch now brings the import itself. The
+  session-row lookup is guarded as well, so a lookup that throws leaves the run where the client
+  sent it.
+- **`worktree-check`** stubs the new `broadcastToConnectedClients` import.
+
+New check: `launcher/held-resume-check.mjs <package dir>` drives a held run through the resume and
+checks the message lands on the same stdin, completes on its own writer, and leaves the work held.
+Upstream's runtime tests (steer, hold, background work, side questions, context window) all pass
+against the patched runtime.
+
+The startup report: frontend 18/19, every chat patch applied, anchors 5/5. The chat line is shorter,
+by the steering edits upstream now makes.
 
 ## Upgrading to 1.37.7
 
@@ -413,12 +446,12 @@ way to tell the intended site from a coincidence — and the run says what it di
 
 ```
 frontend: 9/9 applied -- sidebar default, model description, ctrl+enter to send,
-send while running, cli commands, cost chip, compaction and wait rows (wait rows only from 1.37.5),
+enter steers, cli commands, cost chip, compaction and wait rows (wait rows only from 1.37.5),
 clickable paths, token chip dash
 ```
 
-Nine because three of them belong to patches described below rather than here: *send while
-running* to steering, *clickable paths* to the paths patch and its server half, and *token
+Nine because three of them belong to patches described below rather than here: *enter
+steers* to steering, *clickable paths* to the paths patch and its server half, and *token
 chip dash* to the token counter. `CLOUDCLI_STEER=0` leaves the first out, `CLOUDCLI_LINKS=0`
 the second, and the count comes down with them.
 
@@ -486,62 +519,44 @@ That line is the only sign it was needed. Stop working is what it looks like oth
 CLOUDCLI_STEER=0 cloudcli-start     # to turn it off
 ```
 
-On by default, and the other side of the same coin as Stop. Upstream holds a
-message typed while a turn is running — it becomes a draft, sent once the run ends. But the
-stdin that carries `interrupt()` is open for the whole run, and a user frame pushed into it is
-read at the next agent-loop boundary, in the **same** turn — the model changes course mid-run,
-no restart, no resume, nothing about how the turn was started has to change. Which is what
-makes it small.
+On by default. Since 1.37.8 steering is upstream's own
+([#1760](https://github.com/siteboon/claudecodeui/pull/1760)): a message steered into a running
+turn is pushed onto the CLI's held stdin with priority `next`, read at the next tool call, shown
+where Claude read it, and kept in the history. A turn that ends before another tool call runs it
+as a follow-up turn on the same process. The kit carried all of this itself before 1.37.8 — a
+queue on the parked stream, a route, and a line written into the transcript by hand — and dropped
+it once upstream had it.
 
-Since 1.37.2 that open pipe is upstream's own doing, and the patch rides it. Every turn is
-sent as a stream that yields its messages and then **parks** (`createHeldPromptStream`),
-deliberately holding stdin open so background work can report back through it and the CLI can
-push follow-up turns. Steering needs exactly that pipe, so the patch puts a queue on the park:
+What upstream leaves out is the default. Upstream steers only when **Steer** is picked from the
+send menu; Enter during a turn queues the message until the turn ends. The kit's browser half
+makes Enter steer, by letting a plain send pass the composer's own steer test, so it travels
+upstream's path all the way:
 
-- **The park passes on what is pushed to it.** With nothing steered in it awaits and returns
-  precisely as upstream's `await held` did; a frame pushed in the same tick as the release is
-  drained before it ends, rather than lost to the race.
-- **A push after the release is refused, not queued.** Upstream closes the stream in its own
-  `finally` and on abort, and a frame written then would go into a closed pipe. The refusal
-  reaches the composer as *cannot steer*, so the send is held back the way upstream holds it —
-  rather than recorded as a line nothing acted on.
-- **Write the line down.** The CLI applies the frame but records nothing, and CloudCLI's history
-  *is* the CLI's transcript — there is no second copy anywhere. So the launcher appends the line
-  itself, in the shape a user turn has, chained onto the newest entry: the reader takes it for a
-  normal user message, and the CLI replays it on the next resume rather than continuing a
-  conversation it has no record of being redirected. Without this the steer is real but
-  invisible — the model reacts, and the message is gone on the next reload.
+- **Queue still queues.** An explicit choice from the menu is not overridden.
+- **What upstream will not steer, the kit does not either.** A slash command, or a provider that
+  cannot steer, queues the way it always did.
+- **Queue keeps a key.** On a Mac, Ctrl+Enter queues, beside Cmd+Enter (or Enter) steering. The
+  send menu labels them that way: the send key on Steer, `⌃↵` on Queue. Elsewhere Ctrl+Enter is
+  the send key, so Queue stays a menu choice there.
+- **An escape hatch per tab.** `__cloudcliSteer = false` in the console puts Enter back on
+  upstream's queue, and the menu back on upstream's labels, with no reload.
 
-Before 1.37.2 the same trick hung off the SDK's string-prompt path, which left stdin open by
-omission and only for turns without attachments — so those turns had to be sniffed out at the
-`query()` call site and skipped, and the kit ran a second `streamInput()` of its own whose
-queue could never be allowed to end. Upstream now states the lifetime the patch used to infer,
-and all of that went away: every turn is steerable, attachments included.
+`launcher/steer-keys-check.mjs <patched ide-*.js>` evaluates the steer test, the key tag and both
+menu labels straight out of the served bundle.
 
-A message can also land when the turn is over but the process is still held open for its
-background work. That is not a steer — the run is idle, not mid-turn — and it takes a different
-route for a different reason: [see patch 10](#waiting-said-out-loud), which pushes it into the
-same parked stdin so the work being waited on survives.
-
-The browser half is one of the bundle substitutions: the composer's busy guard learns one
-condition, so a send during a run goes out instead of becoming a draft. It is still guarded on a
-global rather than compiled in, but the sense is now the escape hatch — `__cloudcliSteer = false`
-in the console puts a tab back on upstream's hold-it-back composer mid-session, with no restart.
+The rest of patch 5 is the other use of the same pipe. A message can land when the turn is over
+but the process is still held for its background work. That is not a steer — the run is idle, not
+mid-turn — and upstream starts a new run for it, which kills the work being waited on. The kit
+pushes it into the same parked stdin instead; [see patch 10](#waiting-said-out-loud).
 
 ```
-chat: applied stop always stops, waiting ceiling, waiting env, waiting state, waiting expiry,
-waiting tasks, waiting hold, steering history, steering channel, steering queue, steering park,
-steering pusher, steering export, waiting resume, steering passthrough, steering route,
-waiting route
-[KIT] steering <session> mid-turn (32 chars)
+frontend: ... enter steers, steer menu keys ...
+chat: applied ... steering channel, steering pusher, steering export, waiting resume,
+steering passthrough, waiting route
 ```
 
-Ten steering-gated edits across three server modules — the eight above plus the two that take a
-message into a [held run](#waiting-said-out-loud); the rest of that line is Stop and patch 10's
-ungated half. So it is all-or-nothing by construction — a facade naming a function that failed to be inserted is a
-ReferenceError at import, i.e. a server that does not start. And every one of them is
-**reversed** by `CLOUDCLI_STEER=0`, back to byte-identical with what upstream shipped. Turning
-steering off is a restart, not a reinstall.
+Every one of those edits is **reversed** by `CLOUDCLI_STEER=0`, back to byte-identical with what
+upstream shipped, so turning it off is a restart, not a reinstall.
 
 ## Compaction, said out loud
 
@@ -698,20 +713,18 @@ countdown row is replaced by
 
 What the CLI does with a frame pushed into a parked stream is not inferred. A probe against
 2.1.235 armed a background shell, waited for the `result`, then pushed a second turn: the CLI ran
-it as an ordinary turn, **wrote it into its own transcript** (unlike a mid-turn steer, which
-patch 5 has to record itself, because there the CLI is busy rather than parked), and the shell
+it as an ordinary turn, **wrote it into its own transcript**, and the shell
 armed by the turn before it survived and reported back afterwards, in a third turn. Three turns,
 one process, nothing lost.
 
-Steering already owns the pipe this needs, so the resume half is gated with it and the rows and
-the ceiling are not: `CLOUDCLI_STEER=0` leaves a session that still says what it is waiting for
+The resume pushes through the pusher patch 5 records, so it is gated with steering, and the rows
+and the ceiling are not: `CLOUDCLI_STEER=0` leaves a session that still says what it is waiting for
 and still waits long enough, and goes back to superseding the process when you speak.
 
 ```
 chat: applied stop always stops, waiting ceiling, waiting env, waiting state, waiting expiry,
-waiting tasks, waiting hold, steering history, steering channel, steering queue, steering park,
-steering pusher, steering export, waiting resume, steering passthrough, steering route,
-waiting route
+waiting tasks, waiting hold, ... steering channel, steering pusher, steering export,
+waiting resume, steering passthrough, waiting route
 [KIT] <session> took a message into its held run (8 chars)
 ```
 

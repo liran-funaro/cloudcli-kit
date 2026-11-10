@@ -167,7 +167,10 @@ console.log('worktree coalescing: all checks passed');
       .replace(/^import \{ kitWorktreeIndex, kitWorktreeLabel \} from '.*';$/m,
         `const { kitWorktreeIndex, kitWorktreeLabel } = await import(${JSON.stringify(moduleFile)});`)
       .replace(/^import \{ connectedClients, WS_OPEN_STATE \} from '.*';$/m,
-        'const WS_OPEN_STATE = 1;\nconst connectedClients = new Set();');
+        'const WS_OPEN_STATE = 1;\nconst connectedClients = new Set();')
+      // 1.37.8 sends through a helper instead of walking the clients itself.
+      .replace(/^import \{ broadcastToConnectedClients \} from '.*';$/m,
+        'const broadcastToConnectedClients = () => {};');
     assert.ok(!/^import .*\.\.\//m.test(src),
       'every relative import was replaced: ' + (src.match(/^import .*\.\.\/.*$/m) || [''])[0]);
 
