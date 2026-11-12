@@ -810,6 +810,20 @@ byte-identical with what upstream shipped and leaves the links unmade.
 One consequence worth knowing: a file outside the project opens, but does not save. The editor
 still offers its Save button and the server still refuses it, with the message above.
 
+**Since 1.37.4 upstream reads outside the project itself.** Its reader takes an absolute path
+under the workspace root (your home directory by default), `/tmp`, the temp directory or
+`~/.claude/projects`. That is narrower than the kit's fallback, so the fallback is not carried
+forward. What upstream's reader misses is `~`. `path.isAbsolute('~/x')` is false, so
+`~/notes/review.md` was joined onto the project root and came back
+`File not found`. On those versions the patch is a single edit: a leading `~` becomes the home
+directory before upstream's own checks run. Writes are untouched; a `~/` path there is still a
+folder named `~` inside the project. `launcher/file-read-check.mjs <package dir>` reads a `~/`
+path through the installed service and checks that a write to the same file is still refused.
+
+```
+file reads: upstream reader, ~ expanded
+```
+
 ```
 frontend: 11/11 applied -- ..., clickable paths
 file reads: applied

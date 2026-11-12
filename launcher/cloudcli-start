@@ -2927,8 +2927,28 @@ if 'KIT: reading a path' in s:
 # covers the case this patch was written for, a report an agent left in /tmp.
 # The kit's reader goes further (any absolute path); it is not carried forward,
 # because upstream's narrower rule is the safer one to stand on.
+#
+# What upstream's reader misses is `~`. Agents write paths as ~/x/y.md, the link
+# sends that verbatim, and path.isAbsolute('~/x') is false -- so it was joined
+# onto the project root as <project>/~/x/y.md and came back "File not found".
+# A leading ~ is expanded to the home directory before upstream's own checks,
+# which then decide as they would for the absolute path.
+TILDE = "    async function resolveReadablePath(projectRoot, targetPath) {\n"
+TILDE_NEW = TILDE + """        // KIT: ~/x is the home directory, not a folder named ~ in the project.
+        if (targetPath === '~' || targetPath.startsWith('~/')) {
+            targetPath = path.join(process.getBuiltinModule('os').homedir(), targetPath.slice(1));
+        }
+"""
 if 'resolveReadablePath' in s:
-    print('file reads: upstream reads /tmp and ~/.claude/projects itself; not patched')
+    if 'KIT: ~/x' in s:
+        print('file reads: ~ already expanded')
+        sys.exit(0)
+    if s.count(TILDE) != 1:
+        print('  MISSING: file reads / ~ expansion (%d anchors) -- upstream moved it'
+              % s.count(TILDE), file=sys.stderr)
+        sys.exit(1)
+    open(path, 'w').write(s.replace(TILDE, TILDE_NEW, 1))
+    print('file reads: upstream reader, ~ expanded')
     sys.exit(0)
 for label, old in (('helper', CONFINE), ('text read', TEXT), ('blob read', BLOB)):
     if s.count(old) != 1:
