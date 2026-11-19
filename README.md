@@ -1549,7 +1549,7 @@ Three pieces, each doing only its own job:
 
 | | |
 |---|---|
-| `~/bin/cloudcli-cost` | queries the proxy (five endpoints; the two team ones are optional), writes `dist/cost.html` and `dist/cost.json`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in what it writes |
+| `~/bin/cloudcli-cost` | queries the proxy (five endpoints; the two team ones are optional), writes `dist/cost.html` and `dist/cost.json`. Reads the key and base URL from the environment (`ANTHROPIC_AUTH_TOKEN` / `LITELLM_TOKEN`, `ANTHROPIC_BASE_URL` / `LITELLM_BASE_URL`, or `LITELLM_TOKEN_FILE`), and passes the token to curl over **stdin**, so it never lands in `ps` or in what it writes. The key is picked afresh on every run: it tries the token file, then `LITELLM_TOKEN`, then the `ANTHROPIC_AUTH_TOKEN` in Claude Code's `settings.json`, then the one in the environment. It uses the first one the proxy doesn't refuse. A key rotated into the settings but not into a shell's secrets file is picked up by itself. `--which-key` names the source it would use; `node cost/key-check.mjs` checks the order |
 | the **Cost** tab | a plugin that frames that page, says how old it is, and reloads it every 60s |
 | the sidebar chip | today's figure and how much of the cycle is gone, permanently above Settings — a bundle edit, described with the others below |
 | `cloudcli-cost.timer` | rewrites both files every 5 minutes |

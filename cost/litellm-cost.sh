@@ -30,11 +30,17 @@
 #   ./litellm-cost.sh                       # write the report, exit
 #   ./litellm-cost.sh --out /tmp/cost.html  # somewhere other than the default
 #   ./litellm-cost.sh --start 2026-01-01    # ledger window
+#   ./litellm-cost.sh --which-key           # say which key the proxy accepts, exit
 #
 # Environment (no paths are baked in):
-#   ANTHROPIC_AUTH_TOKEN / LITELLM_TOKEN      virtual key (required)
+#   ANTHROPIC_AUTH_TOKEN / LITELLM_TOKEN      virtual key (one of the key sources)
 #   ANTHROPIC_BASE_URL   / LITELLM_BASE_URL   proxy base URL (required)
-#   LITELLM_TOKEN_FILE                        read the key from a file instead
+#   LITELLM_TOKEN_FILE                        read the key from a file
+#   CLAUDE_CONFIG_DIR                         Claude Code's settings.json, also a key source
+#
+# Each run tries, in order, the token file, LITELLM_TOKEN, the
+# ANTHROPIC_AUTH_TOKEN in Claude Code's settings.json and the one in the
+# environment, and uses the first the proxy does not refuse.
 #   LITELLM_TEAM_ID                           team to report on, default your first
 #   SPEND_START                               ledger window start, default -365d
 #   TIMEOUT                                   per-request seconds, default 45
@@ -61,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --out)        OUT="${2:?--out needs a path}"; shift 2 ;;
     --start)      START="${2:?--start needs YYYY-MM-DD}"; shift 2 ;;
     --token-file) TOKEN_FILE="${2:?--token-file needs a path}"; shift 2 ;;
+    --which-key)  WHICH_KEY=1; shift ;;
     -h|--help)    usage; exit 0 ;;
     *) printf 'unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -171,6 +178,42 @@ table() {
 
 section() { printf '<section><h2>%s</h2>\n' "$(printf '%s' "$1" | esc)"; }
 end_section() { printf '</section>\n'; }
+
+# The key is chosen afresh on every run, from every place it can be. A rotated
+# key reaches Claude Code's settings first and a shell's secrets file later (or
+# never), so the settings copy is tried before the environment's. A copy the
+# proxy refuses (401/403) falls through to the next. Nothing is remembered: the
+# next run asks again, so a key fixed in either place is picked up by itself.
+SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+token_candidates() {
+  if [[ -n $TOKEN_FILE && -r $TOKEN_FILE ]]; then printf 'token file\t%s\n' "$(tr -d '[:space:]' <"$TOKEN_FILE")"; fi
+  if [[ -n ${LITELLM_TOKEN:-} ]]; then printf 'LITELLM_TOKEN\t%s\n' "$LITELLM_TOKEN"; fi
+  if [[ -r $SETTINGS ]]; then
+    jq -r '.env.ANTHROPIC_AUTH_TOKEN // empty | "Claude settings\t\(.)"' "$SETTINGS" 2>/dev/null
+  fi
+  if [[ -n ${ANTHROPIC_AUTH_TOKEN:-} ]]; then printf 'environment\t%s\n' "$ANTHROPIC_AUTH_TOKEN"; fi
+}
+
+KEY_SOURCE=""
+pick_token() {
+  local src tok code first="" first_src="" rejected=()
+  while IFS=$'\t' read -r src tok; do
+    [[ -n $tok ]] || continue
+    [[ -n $first ]] || { first=$tok; first_src=$src; }
+    code="$(printf 'url = "%s/key/info"\nheader = "Authorization: Bearer %s"\nsilent\nmax-time = %s\noutput = "/dev/null"\nwrite-out = "%%{http_code}"\n' \
+      "$BASE" "$tok" "$TIMEOUT" | curl --config - 2>/dev/null)"
+    # Only a refusal moves on: a transport failure is the proxy's, not the key's.
+    if [[ $code != 401 && $code != 403 ]]; then
+      TOKEN=$tok; TOKEN_FILE=""; KEY_SOURCE=$src
+      (( ${#rejected[@]} )) && printf 'using the key from %s; the proxy refused the one from %s\n' \
+        "$src" "$(IFS=,; echo "${rejected[*]}")" >&2
+      return 0
+    fi
+    rejected+=("$src")
+  done < <(token_candidates | awk -F'\t' '!seen[$2]++')
+  # None accepted: run with the first, so the report says why as before.
+  TOKEN=$first; TOKEN_FILE=""; KEY_SOURCE=${first_src:+$first_src (refused)}
+}
 
 read_token() {
   if [[ -n $TOKEN_FILE ]]; then
@@ -289,6 +332,12 @@ HTML
 }
 
 # ---------------------------------------------------------------- fetch
+
+[[ -n $BASE ]] && pick_token
+if [[ ${WHICH_KEY:-} == 1 ]]; then
+  printf '%s\n' "${KEY_SOURCE:-none}"
+  exit 0
+fi
 
 api "/user/info" "$TMP/user.json"
 api "/key/list?return_full_object=true&size=100" "$TMP/keys.json"   # 100 is the API max
