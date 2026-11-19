@@ -1,0 +1,65 @@
+function devproxyd --description 'Manage the persistent CloudCLI SSH SOCKS proxy'
+    set -l label @LABEL@
+    set -l port @PORT@
+    set -l domain gui/(id -u)
+    set -l service $domain/$label
+    set -l plist $HOME/Library/LaunchAgents/$label.plist
+    set -l log_dir $HOME/.local/state/devproxyd
+    set -l action start
+
+    if test (count $argv) -gt 0
+        set action $argv[1]
+    end
+
+    switch $action
+        case start
+            if launchctl print $service >/dev/null 2>&1
+                launchctl enable $service
+                and launchctl kickstart $service
+                or return
+            else
+                if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1
+                    echo "devproxyd: 127.0.0.1:$port is already in use; stop that process first" >&2
+                    return 1
+                end
+
+                launchctl enable $service
+                and launchctl bootstrap $domain $plist
+                or return
+            end
+            echo "devproxyd: persistent SOCKS5 proxy enabled at 127.0.0.1:$port"
+
+        case stop
+            launchctl disable $service
+            if launchctl print $service >/dev/null 2>&1
+                launchctl bootout $service
+            end
+            echo 'devproxyd: stopped and disabled'
+
+        case restart
+            if launchctl print $service >/dev/null 2>&1
+                launchctl enable $service
+                and launchctl kickstart -k $service
+                or return
+            else
+                devproxyd start
+            end
+
+        case status
+            launchctl print $service
+            if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1
+                echo "devproxyd: SOCKS5 proxy is listening at 127.0.0.1:$port"
+            else
+                echo 'devproxyd: service is loaded, but the proxy is not connected yet'
+            end
+
+        case logs
+            mkdir -p $log_dir
+            touch $log_dir/stdout.log $log_dir/stderr.log
+            tail -n 50 -F $log_dir/stdout.log $log_dir/stderr.log
+
+        case '*'
+            echo 'usage: devproxyd [start|stop|restart|status|logs]' >&2
+            return 2
+    end
+end

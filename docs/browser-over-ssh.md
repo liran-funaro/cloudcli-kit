@@ -188,99 +188,69 @@ curl --socks5-hostname 127.0.0.1:1080 \
 
 Expected result: `200`.
 
+### Or keep it up: the launchd agent
+
+`devproxy` lasts as long as its terminal. To have the proxy start at login, survive sleep and
+reconnect after the VPN drops, run the installer once on the Mac. It sets up this and the
+extension below:
+
+```bash
+client/install.sh --hostname devbox.example.com --host dev
+```
+
+It writes four things and loads the agent:
+
+| Path | Role |
+|---|---|
+| `~/Library/LaunchAgents/local.cloudcli.devproxyd.plist` | launchd agent: RunAtLoad and KeepAlive |
+| `~/.local/bin/devproxyd-run` | the loop the agent runs |
+| `~/.config/fish/functions/devproxyd.fish` | `devproxyd start\|stop\|restart\|status\|logs` (when fish is installed) |
+| `~/.config/cloudcli-chrome-proxy/` | the extension, with your hostname and port written in |
+
+`--port` (default `1080`) and `--label` change the SOCKS port and the agent's name. Your
+`~/.ssh/config` is left alone.
+
+What the loop does:
+
+- **Waits for the network.** It connects only once the server's name resolves. On a network
+  where the name resolves only over the VPN, this is a cheap "VPN is up" test.
+- **Reconnects with backoff:** 2 s, doubling to a 30 s cap. A returning network resets it to
+  2 s, as does a connection that stayed up 5 minutes. A failed attempt costs one 15 s connect
+  timeout, so the cap is short on purpose: a VPN that comes back is picked up within half a
+  minute.
+- **Stays off a shared connection.** It never uses a `ControlMaster` socket (`-S none`), so it
+  doesn't ride on, or die with, one your terminals or VS Code share.
+- **Steps aside for a manual `devproxy`.** If something already listens on the port, it waits.
+- **Trims its logs.** launchd never rotates them, so each log is emptied past 1 MB.
+
+**The key has to work without you.** The agent runs with `BatchMode=yes`, and launchd has no one
+to answer a prompt. It needs an `IdentityFile` that is authorized on the server and doesn't
+expire. A short-lived certificate from an interactive login (`step ssh login` and the like)
+lapses, and the agent can't renew it. The installer runs `ssh -o BatchMode=yes <host> true` and
+warns if that fails.
+
+Two notes on `~/.ssh/config`:
+
+- **Set the `Host dev` options in that block.** A block like `Host !*.github.*` looks like it
+  covers every other host. A `Host` line that has only negated patterns matches nothing, so
+  nothing in it applies.
+- **The `IdentityFile` is what the agent uses.** It doesn't need ssh-agent.
+
+`stderr.log` fills with `channel N: open failed: connect failed: Connection refused` whenever
+the browser asks for a port nothing listens on, for example while CloudCLI restarts on the
+server. The tunnel itself is fine.
+
+`node client/devproxyd-check.mjs` runs the loop against stub `ssh`, `lsof` and `dscacheutil`.
+It checks the backoff, its reset when the network returns, the log trim, and a clean stop on
+`TERM`. It needs no Mac.
+
 ---
 
 ## 4. Create the minimal Chrome extension
 
-Create this local directory:
-
-```text
-~/.config/cloudcli-chrome-proxy/
-```
-
-### `manifest.json`
-
-```json
-{
-  "manifest_version": 3,
-  "name": "CloudCLI SSH Proxy",
-  "description": "Routes the CloudCLI hostname through a local SSH SOCKS proxy.",
-  "version": "1.0.0",
-  "permissions": ["proxy", "storage"],
-  "action": {
-    "default_title": "CloudCLI SSH Proxy"
-  },
-  "background": {
-    "service_worker": "background.js"
-  }
-}
-```
-
-### `background.js`
-
-```javascript
-const proxyConfig = {
-  mode: "pac_script",
-  pacScript: {
-    data: `function FindProxyForURL(url, host) {
-      if (host.toLowerCase() === "devbox.example.com") {
-        return "SOCKS5 127.0.0.1:1080";
-      }
-      return "DIRECT";
-    }`,
-    mandatory: true,
-  },
-};
-
-function enableProxy() {
-  chrome.proxy.settings.set(
-    { value: proxyConfig, scope: "regular" },
-    () => {
-      if (chrome.runtime.lastError) {
-        console.error(chrome.runtime.lastError.message);
-        return;
-      }
-
-      chrome.storage.local.set({ enabled: true });
-      chrome.action.setBadgeText({ text: "ON" });
-      chrome.action.setBadgeBackgroundColor({ color: "#2e7d32" });
-      chrome.action.setTitle({ title: "CloudCLI SSH Proxy: enabled" });
-    },
-  );
-}
-
-function disableProxy() {
-  chrome.proxy.settings.clear({ scope: "regular" }, () => {
-    if (chrome.runtime.lastError) {
-      console.error(chrome.runtime.lastError.message);
-      return;
-    }
-
-    chrome.storage.local.set({ enabled: false });
-    chrome.action.setBadgeText({ text: "" });
-    chrome.action.setTitle({ title: "CloudCLI SSH Proxy: disabled" });
-  });
-}
-
-chrome.runtime.onInstalled.addListener(enableProxy);
-chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.get({ enabled: true }, ({ enabled }) => {
-    if (enabled) {
-      enableProxy();
-    }
-  });
-});
-
-chrome.action.onClicked.addListener(() => {
-  chrome.storage.local.get({ enabled: true }, ({ enabled }) => {
-    if (enabled) {
-      disableProxy();
-    } else {
-      enableProxy();
-    }
-  });
-});
-```
+The extension is [`client/chrome-extension/`](../client/chrome-extension/). `client/install.sh`
+installs a copy with your hostname and port written in. To do it by hand, copy the directory and
+replace `devbox.example.com` (and `1080`, if you changed the port) in `background.js`.
 
 The PAC script is inline in `background.js`. There is no PAC file or PAC server. The exact
 hostname uses SOCKS; every other Chrome destination remains `DIRECT`.
@@ -348,7 +318,10 @@ troubleshooting sections in [Claude Code Web UI on a Remote Server](./remote-ser
 
 ## Removing the setup
 
-1. Stop `devproxy` with `Ctrl-C`.
+1. Stop `devproxy` with `Ctrl-C`, or the agent with `devproxyd stop`. Without fish, run
+   `launchctl bootout gui/$(id -u)/local.cloudcli.devproxyd`. Then delete
+   `~/Library/LaunchAgents/local.cloudcli.devproxyd.plist`, `~/.local/bin/devproxyd-run`,
+   `~/.config/fish/functions/devproxyd.fish` and `~/.local/state/devproxyd`.
 2. Remove the unpacked extension on `chrome://extensions`.
 3. Delete local files if desired:
    ```bash

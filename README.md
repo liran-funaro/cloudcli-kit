@@ -209,7 +209,8 @@ troubleshooting:
   loopback, and running it under systemd.
 - [**Remote Dev Server Browser Access over SSH**](docs/browser-over-ssh.md) — one SSH SOCKS
   proxy and a small Chrome extension, so the browser uses the server's own hostname and every
-  loopback port works without a tunnel per service.
+  loopback port works without a tunnel per service. On a Mac, `client/install.sh` installs the
+  extension and a launchd agent that keeps the proxy up across sleep and VPN drops.
 
 The short version follows.
 

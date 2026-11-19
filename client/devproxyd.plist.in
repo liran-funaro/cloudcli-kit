@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by client/install.sh: launchd expands no `~`, so the paths are absolute. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@LABEL@</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@HOME@/.local/bin/devproxyd-run</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>DEVPROXYD_HOST</key>
+        <string>@HOST@</string>
+        <key>DEVPROXYD_PROXY</key>
+        <string>127.0.0.1:@PORT@</string>
+        <key>DEVPROXYD_LOG_DIR</key>
+        <string>@HOME@/.local/state/devproxyd</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@HOME@/.local/state/devproxyd/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@HOME@/.local/state/devproxyd/stderr.log</string>
+</dict>
+</plist>

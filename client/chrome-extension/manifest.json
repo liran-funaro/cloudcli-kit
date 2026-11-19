@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "CloudCLI SSH Proxy",
+  "description": "Routes the CloudCLI hostname through a local SSH SOCKS proxy.",
+  "version": "1.0.0",
+  "permissions": ["proxy", "storage"],
+  "action": {
+    "default_title": "CloudCLI SSH Proxy"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

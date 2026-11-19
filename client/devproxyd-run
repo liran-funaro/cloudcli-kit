@@ -1,0 +1,134 @@
+#!/bin/sh
+# Keeps the browser's SSH SOCKS proxy up: waits for the network, connects,
+# and reconnects with backoff when the link drops. Run by the launchd agent
+# that client/install.sh writes; configured from the agent's environment.
+#
+#   DEVPROXYD_HOST     ssh alias of the server            (default dev)
+#   DEVPROXYD_PROXY    local SOCKS address                (default 127.0.0.1:1080)
+#   DEVPROXYD_LOG_DIR  directory of the agent's logs, trimmed past 1 MB
+
+host=${DEVPROXYD_HOST:-dev}
+proxy=${DEVPROXYD_PROXY:-127.0.0.1:1080}
+port=${proxy##*:}
+initial_delay=${DEVPROXYD_INITIAL_DELAY:-2}
+# A failed attempt costs one ConnectTimeout, so retrying every 30 s is cheap,
+# and a VPN that comes back while the backoff is long waits at most that.
+max_delay=${DEVPROXYD_MAX_DELAY:-30}
+stable_after=${DEVPROXYD_STABLE_AFTER:-300}
+log_dir=${DEVPROXYD_LOG_DIR:-}
+log_max=1048576
+delay=$initial_delay
+ssh_pid=
+
+log() {
+    printf '%s devproxyd: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+stop() {
+    trap - TERM INT HUP
+    if [ -n "$ssh_pid" ]; then
+        kill "$ssh_pid" 2>/dev/null || true
+        wait "$ssh_pid" 2>/dev/null || true
+    fi
+    exit 0
+}
+
+# Sleeps in short pieces, in the background, so a TERM is acted on at once.
+sleep_until() {
+    deadline=$1
+    while :; do
+        remaining=$((deadline - $(date +%s)))
+        if [ "$remaining" -le 0 ]; then
+            return
+        fi
+        if [ "$remaining" -gt 5 ]; then
+            remaining=5
+        fi
+        sleep "$remaining" &
+        ssh_pid=$!
+        wait "$ssh_pid" || exit 1
+        ssh_pid=
+    done
+}
+
+# The server's name resolving is a cheap "VPN is up" test when, as on a
+# corporate network, it only resolves there.
+network_ready() {
+    hostname=$(ssh -G "$host" 2>/dev/null | while IFS=' ' read -r key value rest; do
+        if [ "$key" = hostname ]; then
+            printf '%s\n' "$value"
+            break
+        fi
+    done)
+    [ -n "$hostname" ] && dscacheutil -q host -a name "$hostname" | grep -q '^ip_address:'
+}
+
+# launchd never rotates what it writes. Truncating in place is safe: it opens
+# the files for append.
+trim_logs() {
+    [ -n "$log_dir" ] || return 0
+    for f in "$log_dir"/*.log; do
+        [ -f "$f" ] && [ "$(wc -c < "$f")" -gt "$log_max" ] && : > "$f"
+    done
+    return 0
+}
+
+trap stop TERM INT HUP
+
+while :; do
+    # Someone else holds the port (a manual `devproxy`): leave it be.
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        sleep_until $(($(date +%s) + 5)) || exit 0
+        continue
+    fi
+
+    if ! network_ready; then
+        log 'network is not ready; waiting locally before connecting'
+        while ! network_ready; do
+            sleep_until $(($(date +%s) + 2)) || exit 0
+        done
+        # The outage is over, so the backoff it built up is not this
+        # connection's: start again from the shortest wait.
+        delay=$initial_delay
+        log 'network is ready'
+    fi
+
+    trim_logs
+    started_at=$(date +%s)
+    log "connecting SOCKS5 proxy at $proxy through $host"
+
+    # -S none / ControlMaster=no: never ride on, or die with, a shared
+    # ControlMaster socket. BatchMode: launchd has no one to answer a prompt.
+    ssh -NT \
+        -S none \
+        -o ControlMaster=no \
+        -o ControlPersist=no \
+        -o BatchMode=yes \
+        -o ConnectTimeout=15 \
+        -o ConnectionAttempts=1 \
+        -o ExitOnForwardFailure=yes \
+        -o ServerAliveInterval=30 \
+        -o ServerAliveCountMax=3 \
+        -D "$proxy" \
+        "$host" &
+    ssh_pid=$!
+    wait "$ssh_pid"
+    status=$?
+    ssh_pid=
+
+    now=$(date +%s)
+    lived_for=$((now - started_at))
+    if [ "$lived_for" -ge "$stable_after" ]; then
+        delay=$initial_delay
+    fi
+
+    log "connection ended with status $status after ${lived_for}s; next attempt in ${delay}s"
+    sleep_until $((now + delay)) || exit 0
+
+    if [ "$delay" -lt "$max_delay" ]; then
+        delay=$((delay * 2))
+        if [ "$delay" -gt "$max_delay" ]; then
+            delay=$max_delay
+        fi
+    fi
+done
