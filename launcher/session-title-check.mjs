@@ -28,6 +28,8 @@ export const sessionsDb = {
   getSessionByProviderSessionId: (id) => [...rows.values()].find((r) => r.provider_session_id === id) ?? null,
   getSessionById: (id) => rows.get(id) ?? null,
   updateSessionCustomName: (id, name) => { rows.get(id).custom_name = name; },
+  // 1.37.9 (claudecodeui#1787) skips a transcript whose context was cleared.
+  isProviderSessionSuperseded: () => false,
 };
 `);
 const loadable = path.join(root, 'sync.mjs');

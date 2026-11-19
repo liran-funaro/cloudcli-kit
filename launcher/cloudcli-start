@@ -956,9 +956,10 @@ else:
 # has no row for (named by their project, as the server would name them), and
 # re-sorts newest first. Rows the live list does not hold -- an older page of
 # the feed -- keep their place in the order by their own timestamp.
-RECENCY = re.compile(r'(\w+)=f\.useMemo\(\(\)=>\{if\((\w+)\.length===0\)return \2;const (\w+)=new Map;'
-                     r'for\(const (\w+) of (\w+)\)for\(const (\w+) of \4\.sessions\?\?\[\]\)\{'
-                     r'.{0,300}?return (\w+)\?(\w+):\2\},\[\5,\2\]\)')
+# Identifiers are [\w$]+: the minifier names some locals `$e` (1.37.9 did).
+RECENCY = re.compile(r'([\w$]+)=f\.useMemo\(\(\)=>\{if\(([\w$]+)\.length===0\)return \2;const ([\w$]+)=new Map;'
+                     r'for\(const ([\w$]+) of ([\w$]+)\)for\(const ([\w$]+) of \4\.sessions\?\?\[\]\)\{'
+                     r'.{0,300}?return ([\w$]+)\?([\w$]+):\2\},\[\5,\2\]\)')
 if '_kitByRecency' in s:
     missing.append('conversations by recency (already in place)')
 elif len(RECENCY.findall(s)) == 1:
@@ -2755,6 +2756,7 @@ PY
     fi
   else
     mv "$CSP.prepatch" "$CSP"
+    echo "WARNING: $(basename "$CSP") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -2802,6 +2804,7 @@ PY
     fi
   else
     mv "$TUS.prepatch" "$TUS"
+    echo "WARNING: $(basename "$TUS") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -2968,6 +2971,7 @@ PY
     fi
   else
     mv "$FTS.prepatch" "$FTS"
+    echo "WARNING: $(basename "$FTS") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -3291,6 +3295,7 @@ WTPY
     fi
   else
     mv "$PWS.prepatch" "$PWS"
+    echo "WARNING: $(basename "$PWS") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -3353,11 +3358,12 @@ assert s.count(OLD_NAME) == 1, 'display name'
 s = s.replace(OLD_NAME, NEW_NAME, 1)
 
 # and the row can say which checkout without waiting for a refresh
+# The lastActivity line alone: 1.37.9 lists the fork fields after it (#1621).
 OLD_SESSION = """            lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
-        },"""
+"""
 NEW_SESSION = """            lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
             worktree: kitWorktree,
-        },"""
+"""
 assert s.count(OLD_SESSION) == 1, 'session block'
 s = s.replace(OLD_SESSION, NEW_SESSION, 1)
 
@@ -3373,6 +3379,7 @@ SUBPY
     fi
   else
     mv "$SUB.prepatch" "$SUB"
+    echo "WARNING: $(basename "$SUB") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -3457,6 +3464,7 @@ SSVPY
     fi
   else
     mv "$SSV.prepatch" "$SSV"
+    echo "WARNING: $(basename "$SSV") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -3530,17 +3538,19 @@ async function kitTranscriptCwd(filePath, firstCwd) {
 """
 s = s.replace(IMPORT, IMPORT + HELPERS, 1)
 
-OLD = """        if (!parsed) {
+# Anchored on the extractor's return just above the guard: the guard alone
+# appears twice, and 1.37.9 put a check of its own after it (#1787).
+OLD = """                projectPath,
+            };
+        });
+        if (!parsed) {
             return null;
         }
-        // App-created sessions are keyed by an app id"""
-NEW = """        if (!parsed) {
-            return null;
-        }
-        // KIT: history carried in from another host can open the file, so trust
+"""
+NEW = OLD + """        // KIT: history carried in from another host can open the file, so trust
         // the directory the transcript lives in over the first line in it.
         parsed.projectPath = await kitTranscriptCwd(filePath, parsed.projectPath);
-        // App-created sessions are keyed by an app id"""
+"""
 assert s.count(OLD) == 1, 'processSessionFile anchor'
 s = s.replace(OLD, NEW, 1)
 
@@ -3667,6 +3677,7 @@ SYNCPY
     fi
   else
     mv "$SYNC.prepatch" "$SYNC"
+    echo "WARNING: $(basename "$SYNC") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -4066,6 +4077,7 @@ AUTPY
     fi
   else
     mv "$AUT.prepatch" "$AUT"
+    echo "WARNING: $(basename "$AUT") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 
@@ -4199,6 +4211,7 @@ ROUTEPY
     fi
   else
     mv "$ROUTES.prepatch" "$ROUTES"
+    echo "WARNING: $(basename "$ROUTES") NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
   fi
 fi
 

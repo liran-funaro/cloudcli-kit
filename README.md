@@ -67,11 +67,36 @@ merge *plus* a vite + tsc build with two native modules.)
 | **curl and jq** | the Cost tab's report script and the Slack report command — `--no-cost` and `--no-slack` skip them |
 | **Linux, or macOS without the units** | everything is POSIX except `systemd/`, which is Linux; on macOS run the launcher directly or wrap it in a launchd plist |
 
-Written against **CloudCLI 1.37.8** and **Claude Code 2.1.317** (first written against 1.37.3). The bundle and server patches
+Written against **CloudCLI 1.37.9** and **Claude Code 2.1.328** (first written against 1.37.3). The bundle and server patches
 are anchored on text upstream chose, so a later release can move an anchor: the launcher then
 reports that patch as `MISSING`, applies the rest, and leaves the file it could not patch
 untouched — see [the anchor self-check](#the-anchor-self-check). Nothing here forks or vendors
 CloudCLI; it patches the installed package in place, on every start.
+
+## Upgrading to 1.37.9
+
+Three anchors moved, and two of them used to move silently:
+
+- **Conversations by recency** (patch 19). The minifier named a local `$e`, which `\w+` does not
+  match. That regex now matches identifiers with `[\w$]+`.
+- **The live broadcast** (patch 16). Upstream lists the fork fields
+  ([#1621](https://github.com/siteboon/claudecodeui/pull/1621)) after `lastActivity`, so the
+  worktree label is now anchored on that line alone.
+- **The session synchronizer** (patch 17 and the title). Clearing a session's context
+  ([#1787](https://github.com/siteboon/claudecodeui/pull/1787)) put a check of its own right
+  after the `if (!parsed)` guard. The cwd fix is now anchored on the extractor's return above
+  the guard, which appears twice in the file.
+
+A server patch whose anchor fails puts its file back as upstream shipped it. It used to do that
+without a word, so the startup report looked clean while patches 16, 17 and the title were off.
+Each now prints `WARNING: <file> NOT patched -- an anchor moved`.
+
+The check stubs follow upstream's new imports: `autonomy-check` gets `onRunSettled`
+([#1697](https://github.com/siteboon/claudecodeui/pull/1697)), and the two synchronizer checks
+get `isProviderSessionSuperseded` (#1787).
+
+The startup report is the same as on 1.37.8: frontend 19/20 (the compaction rows stand down),
+every chat and server patch applied, anchors 5/5.
 
 ## Upgrading to 1.37.8
 

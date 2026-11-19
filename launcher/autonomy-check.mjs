@@ -62,6 +62,8 @@ export const userPreferencesDb = { getPreferences: () => globalThis.__kitPrefs }
 const wsStub = path.join(root, 'ws.mjs');
 fs.writeFileSync(wsStub, `
 export const chatRunRegistry = { isProcessing: (id) => globalThis.__kitProcessing.has(id) };
+// 1.37.9 (claudecodeui#1697) dispatches a queued message when its run settles.
+export function onRunSettled() { return () => {}; }
 export async function runDetachedChatTurn(input) {
   globalThis.__kitSent.push(input);
   return { started: true };

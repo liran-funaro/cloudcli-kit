@@ -22,7 +22,9 @@ if (!src.includes('kitTranscriptCwd')) {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-synccwd-'));
 const stub = path.join(root, 'db-stub.mjs');
 fs.writeFileSync(stub, 'export const sessionsDb = {'
-    + ' getSessionByProviderSessionId: () => null, getSessionById: () => null };\n');
+    + ' getSessionByProviderSessionId: () => null, getSessionById: () => null,'
+    // 1.37.9 (claudecodeui#1787) skips a transcript whose context was cleared.
+    + ' isProviderSessionSuperseded: () => false };\n');
 
 const utils = path.join(PKG, 'dist-server/server/shared/utils.js');
 const loadable = path.join(root, 'sync.mjs');
