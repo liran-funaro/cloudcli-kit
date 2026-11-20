@@ -1317,6 +1317,68 @@ to carry is not added, or the tab would fill with history), and sorts newest fir
 moved, it returns the same array, so the list does not re-render.
 `launcher/conversations-recency-check.mjs` runs the patched memo out of the served bundle.
 
+## The agent map
+
+Upstream shows running background work as a strip of purple chips at the top of the transcript,
+and an agent as a card in it. Nothing shows them all together, and a job's output is gone once
+its chip is. The map replaces the strip, which it hides. The kit adds a pill beside the composer's token-count pill. While anything runs, it counts
+the running agents and jobs ("2 agents · 1 job") with a green dot. When idle, it shows how many
+agents the session had, with a grey dot, or red if one failed. Clicking it opens a map:
+
+- **Agents:** a tree of who spawned whom, starting from the main session. Each agent shows its
+  name, model, context tokens (its latest reading) and runtime. Siblings are sorted as the VS
+  Code extension sorts them: working first, then failed, then finished, newest first. Click one
+  for what it did: its tool calls and notes in order, then the answer its parent got back.
+- **Active jobs:** the background jobs running now, each with a status dot, the description or
+  command, the type (`shell`, `monitor`) and the runtime.
+- **Recently finished:** jobs that ended in the last 15 minutes, newest first. They leave after
+  that. The VS Code extension drops a job the moment it ends; a short wait leaves time to read
+  its output.
+
+Click a job for its output: the last 64 KB, refreshed while it runs, or the whole file (up to
+4 MB) on request.
+
+**Stop.** A running job or agent has a ✕ on its row and a Stop button in its view. A stop goes
+through the runtime's own `stopClaudeSDKTask`, which only counts it once the task has left the
+runtime's tracker. A task the tracker no longer holds is not running any more. That is the
+leftover chip of claudecodeui#1656. Its ✕ redraws the map rather than reporting an error, and
+it offers no ✕ in the first place.
+
+**A refresh loses nothing.** Upstream kept its count of running work in the page, so a reload
+lost it until the next poll. The map is built on the server from the session's files and the
+runtime's tracker, so a reload simply asks again. Background work counts as running only while
+that tracker holds it. A job whose end never reached the transcript (its CLI restarted under it)
+therefore reads `stopped`, not `running`, for as long as the session lives. An `Agent` call runs
+in the background unless it says `run_in_background: false`, as the runtime reads it. Its tool
+result is then only the launch acknowledgement, so its end comes from its notification and its
+answer from its own last message.
+
+Everything is read from what Claude Code writes to disk: the session's transcript, and
+`<session>/subagents/agent-<id>.jsonl` with its `.meta.json`, which names the call that
+spawned the agent. That call is what places it in the tree.
+
+- **Reads are incremental.** Transcripts only grow, so each poll reads only what was appended.
+  On a 260 MB transcript the first read takes about 2 s; each poll after it takes milliseconds,
+  and about 5 MB stays in memory.
+- **Status comes from the live run.** Work that never reported an end counts as running only
+  while the session's process is up. Otherwise it reads `stopped`.
+- **Only named files are opened.** A job's output is read only from the path its own
+  transcript gave for it. Everything in the panel is set as text, never as markup.
+
+Two files the kit owns do the work, so the minified bundle is not touched.
+`agents/kit-agents.js` is installed as `dist-server/server/kit-agents.js` and mounted at
+`/api/kit/agents` behind the app's own `authenticateToken`. `agents/ide-agents.js` is served
+as `/ide-agents.js` and linked into `index.html`. The only upstream edit is the import and
+mount in `server/index.js`. `install.sh` puts both files in `~/.config/cloudcli/agents/`, and
+`CLOUDCLI_AGENTS=0` takes all of it back out. `node agents/agent-map-check.mjs <package dir>`
+builds a session on disk and checks the jobs, the tree, the statuses, the output and the
+activity through the installed module. `node agents/pill-check.mjs <jsdom dir>` runs the browser
+script in a page shaped like the composer: where the pill goes, what it says, the section order
+and the 15-minute expiry, plus Stop and the hidden strip. `node agents/refresh-check.mjs
+<package dir>` drives the real runtime with a scripted CLI. It starts a background job and agent,
+ends the turn, and reads the real route as two page loads would: both see the work running. It
+then stops the job through the runtime.
+
 ## A session runs where it lives
 
 The worktree picker sets the directory for a **new** session — and, as written, for every other
@@ -1730,7 +1792,7 @@ never edits.
 - Everything is an environment knob, read on every start: `CLOUDCLI_PATCH_ONLY=1` (apply and
   exit), `CLOUDCLI_FRONTEND=0` (serve upstream's bundle untouched), `CLOUDCLI_STEER=0`
   (steering off, see above), `CLOUDCLI_LINKS=0` (clickable paths off, and the read they need
-  with them), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
+  with them), `CLOUDCLI_AGENTS=0` (the agents pill and its route off), `CLOUDCLI_DROP_MODELS` (see above), and `CLOUDCLI_THEME` (a stylesheet
   somewhere other than `~/.config/cloudcli`).
   `CLOUDCLI_PREFIX` and `CLOUDCLI_CONF` move the paths themselves, for an install that is not
   where the launcher looks.

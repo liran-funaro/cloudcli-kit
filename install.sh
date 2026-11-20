@@ -6,6 +6,7 @@
 #   ~/.config/cloudcli/ide-theme.css   appearance -- yours to retune, seeded once
 #   ~/bin/cloudcli-start               applies it to the package on every start,
 #                                      so an upgrade cannot revert it
+#   ~/.config/cloudcli/agents/         the agents pill: its server module and script
 #   ~/bin/cloudcli-cost                writes the LiteLLM spend report
 #   ~/bin/cloudcli-slack-report        posts a report to a Slack workflow webhook
 #   ~/bin/cloudcli-autonomous          arms a session to keep working unattended
@@ -71,6 +72,16 @@ else
   cp -f "$REPO/theme/ide-theme.css" "$CONF/ide-theme.css"
   echo "  installed $CONF/ide-theme.css"
 fi
+
+# --- the agent map: code, not config, so always the repo's copy ----------------
+# The server module and the browser script behind the composer's agents pill.
+# cloudcli-start copies them into the package on every start (patch 26).
+echo "agent map:"
+mkdir -p "$CONF/agents"
+for f in kit-agents.js ide-agents.js; do
+  cp -f "$REPO/agents/$f" "$CONF/agents/$f"
+done
+echo "  installed $CONF/agents"
 
 # --- what the retired Recent list left behind --------------------------------
 # The kit used to carry a Recent-conversations list of its own: first a floating

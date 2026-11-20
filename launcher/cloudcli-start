@@ -1401,15 +1401,76 @@ fi
 find "$PKG/dist/assets" -maxdepth 1 -name 'ide-*.js' \
      ! -name "${BJS:-none}" -delete 2>/dev/null || true
 
+# --- patch 26: the agent map behind the composer's agents pill ---------------
+# Upstream draws a background job as a strip of chips and an agent as a card in
+# the transcript; nothing shows them all at once, or a finished job's output.
+# A pill under the composer counts the session's agents and background jobs,
+# and opens a map: jobs with status, type and runtime, agents as a tree of who
+# spawned whom with model, context tokens and runtime. A job opens its output
+# (the tail while it runs, the whole on request); an agent opens what it did.
+#
+# Two files the kit owns, so the minified bundle is not touched: a server module
+# (agents/kit-agents.js) that reads the session's transcripts incrementally and
+# serves /api/kit/agents behind the app's own authenticateToken, and a browser
+# script (agents/ide-agents.js) linked into index.html below. The one upstream
+# edit is the route's mount in server/index.js. install.sh puts both files in
+# $CONF/agents; CLOUDCLI_AGENTS=0 takes all of it out.
+AGENTS_SRC="${CLOUDCLI_AGENTS_DIR:-$CONF/agents}"
+SIDX="$PKG/dist-server/server/index.js"
+AGVER=""
+if [[ -f $SIDX ]]; then
+  if ! grep -q KIT "$SIDX"; then
+    cp "$SIDX" "$SIDX.kitorig"
+  elif [[ -f $SIDX.kitorig ]]; then
+    cp "$SIDX.kitorig" "$SIDX"
+  fi
+fi
+rm -f "$PKG/dist-server/server/kit-agents.js" "$PKG/dist/ide-agents.js"
+if [[ ${CLOUDCLI_AGENTS:-1} == 1 && -f $SIDX && -f $AGENTS_SRC/kit-agents.js && -f $AGENTS_SRC/ide-agents.js ]]; then
+  cp "$AGENTS_SRC/kit-agents.js" "$PKG/dist-server/server/kit-agents.js"
+  cp "$SIDX" "$SIDX.prepatch"
+  if python3 - "$SIDX" <<'AGPY'
+import re, sys
+path = sys.argv[1]
+s = open(path).read()
+# After load-env, which has to run before anything else is imported.
+ENV = "import './load-env.js';\n"
+MOUNT = re.compile(r"^app\.use\('/api/voice', authenticateToken[^\n]*\n", re.M)
+if s.count(ENV) != 1 or len(MOUNT.findall(s)) != 1:
+    print('  MISSING: agent map (%d/%d anchors) -- upstream moved it'
+          % (s.count(ENV), len(MOUNT.findall(s))), file=sys.stderr)
+    sys.exit(1)
+s = s.replace(ENV, ENV + "import { kitAgentsRoutes } from './kit-agents.js'; // KIT: agent map\n", 1)
+s = MOUNT.sub(lambda m: m.group(0) + "app.use('/api/kit/agents', authenticateToken, await kitAgentsRoutes()); // KIT: agent map\n", s, count=1)
+open(path, 'w').write(s)
+print('agent map: applied')
+AGPY
+  then
+    if node --check "$SIDX" >/dev/null 2>&1 && node --check "$PKG/dist-server/server/kit-agents.js" >/dev/null 2>&1; then
+      rm -f "$SIDX.prepatch"
+      cp "$AGENTS_SRC/ide-agents.js" "$PKG/dist/ide-agents.js"
+      AGVER="$(md5sum "$PKG/dist/ide-agents.js" | cut -c1-8)"
+    else
+      mv "$SIDX.prepatch" "$SIDX"
+      rm -f "$PKG/dist-server/server/kit-agents.js"
+      echo "WARNING: the agent map broke syntax, reverted" >&2
+    fi
+  else
+    mv "$SIDX.prepatch" "$SIDX"
+    rm -f "$PKG/dist-server/server/kit-agents.js"
+    echo "WARNING: index.js NOT patched -- an anchor moved (error above); left as upstream shipped it" >&2
+  fi
+fi
+
 # --- link both into index.html ----------------------------------------------
 # Each tag is removed and re-inserted rather than edited in place, so the
 # indentation comes out right whatever an upgrade does to index.html, an empty
 # version cleanly un-links, and unchanged input gives unchanged output.
 IDX="$PKG/dist/index.html"
 if [[ -f $IDX ]]; then
-  python3 - "$IDX" "$VER" "$(basename "${ENTRY:-}")" "$BJS" <<'PY'
+  python3 - "$IDX" "$VER" "$(basename "${ENTRY:-}")" "$BJS" "$AGVER" <<'PY'
 import re, sys
-path, ver, entry, bjs = sys.argv[1:5]
+path, ver, entry, bjs, agver = sys.argv[1:6]
 src = open(path).read()
 out = src
 
@@ -1446,9 +1507,15 @@ if ver:
 # pill, so a machine that ran that version stops loading it.
 out = re.sub(r'[ \t]*<script[^>]*src="/ide-recent\.js[^"]*"[^>]*></script>\n?', '', out)
 
+# The agent map's script (patch 26): re-linked only when it was installed.
+out = re.sub(r'[ \t]*<script[^>]*src="/ide-agents\.js[^"]*"[^>]*></script>\n?', '', out)
+if agver:
+    out = before_head(out, '<script defer src="/ide-agents.js?v=%s"></script>' % agver)
+
 state = ', '.join(filter(None, [
     'ide-theme.css?v=%s' % ver if ver else '',
     'assets/%s' % bjs if bjs else '',
+    'ide-agents.js?v=%s' % agver if agver else '',
 ])) or 'nothing'
 if out != src:
     open(path, 'w').write(out)
