@@ -1047,6 +1047,34 @@ elif len(wm) == 1:
 else:
     missing.append('session checkout (%d workspaces)' % len(wm))
 
+# (20) The header follows the live update of the session it shows. The header
+# reads `selectedSession`, a copy of the sidebar row taken when the session was
+# opened, and a `session_upserted` updates the row but the copy only when the
+# provider id changes. So a new session's title (and, here, its worktree, which
+# names the checkout under the title) reached the sidebar and never the header
+# until a reload. Only those two fields are taken, and only when one changed:
+# the chat reads its one-shot search jump off every new copy, as upstream's
+# rename notes, so the copy is not replaced for nothing.
+UPS = re.compile(r'const (\w+)=typeof (\w+)\.providerSessionId=="string"&&\2\.providerSessionId!==\2\.sessionId'
+                 r'\?\2\.providerSessionId:null;if\(!\1\)return;const \w+=\{\.\.\.\2\.session,[^}]*\};'
+                 r'(\w+)\(\w+=>\w+\?\.id!==\1\?')
+um = UPS.findall(s)
+if '_kitHeadSync' in s:
+    missing.append('header sync (already in place)')
+elif len(um) == 1:
+    alias, ev, setter = um[0]
+    m = UPS.search(s)
+    s = s[:m.start()] + (
+        '%(set)s(_kitHeadSync=>{if(!_kitHeadSync||_kitHeadSync.id!==%(ev)s.sessionId)return _kitHeadSync;'
+        'const _t=%(ev)s.session.summary&&%(ev)s.session.summary.trim()?%(ev)s.session.summary:_kitHeadSync.summary,'
+        '_w=%(ev)s.session.worktree??_kitHeadSync.worktree;'
+        'if(_t===_kitHeadSync.summary&&_w===_kitHeadSync.worktree)return _kitHeadSync;'
+        'const{__searchTargetSnippet:_a,__searchTargetTimestamp:_b,..._r}=_kitHeadSync;'
+        'return{..._r,summary:_t,worktree:_w}});' % {'set': setter, 'ev': ev}) + s[m.start():]
+    applied.append('header sync')
+else:
+    missing.append('header sync (%d matches)' % len(um))
+
 # (14) Which checkout a new session runs in, in the panel that asks the rest of
 # it. A new conversation opens with the provider/model card at the top of the
 # transcript -- present only until the first message -- which is where this
@@ -3093,7 +3121,7 @@ import { existsSync } from 'node:fs';
 // re-reads the list each time it opens, and a worktree created a moment ago has
 // to be in it.
 const KIT_WT_TTL_MS = 3000;
-let kitWtCache = { at: 0, byRepo: new Map(), repoOf: new Map(), branchOf: new Map() };
+let kitWtCache = { at: 0, paths: new Set(), byRepo: new Map(), repoOf: new Map(), branchOf: new Map() };
 
 function kitGit(dir, args) {
     try {
@@ -3177,7 +3205,11 @@ function kitOrphanRepo(orphanPath, repoRoots) {
 }
 
 export function kitWorktreeIndex(projectRows) {
-    if (Date.now() - kitWtCache.at < KIT_WT_TTL_MS) {
+    // Fresh AND built from these rows: the first session in a new worktree adds
+    // its project row moments after the picker's refresh built the index, and an
+    // index without that row announces the session unbadged, as a row of its own.
+    if (Date.now() - kitWtCache.at < KIT_WT_TTL_MS
+        && projectRows.every((row) => kitWtCache.paths.has(row.project_path))) {
         return kitWtCache;
     }
     const byRepo = new Map();
@@ -3213,7 +3245,7 @@ export function kitWorktreeIndex(projectRows) {
         repoOf.set(row.project_path, repoRoot);
         byRepo.get(repoRoot).add(row.project_path);
     }
-    kitWtCache = { at: Date.now(), byRepo, repoOf, branchOf };
+    kitWtCache = { at: Date.now(), paths: new Set(projectRows.map((row) => row.project_path)), byRepo, repoOf, branchOf };
     return kitWtCache;
 }
 

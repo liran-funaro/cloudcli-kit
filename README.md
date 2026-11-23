@@ -1128,6 +1128,20 @@ now names the repository and carries the worktree label, so the row appears in t
 badged, without waiting for a reload. Both halves share one grouping index rather than forking
 git twice.
 
+That index is cached for 3 seconds, and **a cache is only as good as the rows it was built
+from**. The first session in a fresh worktree adds that checkout's project row moments after the
+picker's refresh built the index. An index without the row placed the new session nowhere, so it
+was announced unbadged against a row of its own, and the badge only appeared after a reload. The
+cache now answers only for the project rows it was built from, and a new row rebuilds it.
+
+**The header follows the same update.** The title above the transcript, and the checkout named
+under it, are read from a copy of the sidebar row taken when the session was opened. Upstream
+updates that copy only when the provider id changes, so a new session's title reached the
+sidebar and not the header until a reload. Patch 20 carries the title and worktree of the open
+session's `session_upserted` into the header, and only when one of them changed: the chat replays
+its search jump on every new copy. `launcher/header-sync-check.mjs` runs that statement out of
+the served bundle.
+
 `launcher/worktree-check.mjs` runs the patched service against a real temporary repository with
 real worktrees, one of them removed properly mid-test, plus a lookalike directory and a
 foreign-root path that must both stay separate.

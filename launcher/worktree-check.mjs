@@ -196,6 +196,24 @@ console.log('worktree coalescing: all checks passed');
     const fromRepo = await bc.buildSessionUpsertedEvent('s-main');
     assert.equal(fromRepo.project.path, repo);
     assert.equal(fromRepo.session.worktree, '', 'a main-checkout session claims no worktree');
+
+    // The first session in a fresh worktree. The index was built a moment ago
+    // (above; in the app, by the picker's refresh just before the send), when this
+    // checkout had no project row -- createAppSession adds it with the session.
+    // A cache that answered from the older set announced it unbadged, against a
+    // row of its own, until a reload.
+    git(repo, 'worktree', 'add', '-q', '-b', 'b.wt-2', `${repo}.wt-2`);
+    projectRows.push({ project_id: 'p-wt2', project_path: `${repo}.wt-2`, custom_project_name: null });
+    sessionRows[`${repo}.wt-2`] = [{ session_id: 's-wt2', provider: 'claude', project_path: `${repo}.wt-2`, updated_at: '2026-09-24T11:00:00Z', custom_name: '' }];
+    const byId = globalThis.__kitSessionsDb.getSessionById;
+    globalThis.__kitSessionsDb.getSessionById = (id) => (id === 's-wt2'
+      ? { ...sessionRows[`${repo}.wt-2`][0], isArchived: 0 } : byId(id));
+    const fresh = await bc.buildSessionUpsertedEvent('s-wt2');
+    assert.equal(fresh.project.path, repo, 'a brand-new worktree session is announced against the repository at once');
+    assert.equal(fresh.session.worktree, '.wt-2', 'and badged, not blank until a reload');
+    const listed = await service.getProjectsWithSessions({ skipSynchronization: true });
+    assert.ok(!listed.some((p) => p.path === `${repo}.wt-2`), 'nor does the list give the new checkout a row of its own');
+    assert.equal(listed.find((p) => p.path === repo).sessions.find((s) => s.id === 's-wt2')?.worktree, '.wt-2');
     console.log('broadcast coalescing: checks passed');
   }
 }
